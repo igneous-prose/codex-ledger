@@ -1,6 +1,6 @@
 # Architecture
 
-Phase 2 keeps the Phase 1 import path and deepens the normalizer:
+Phase 2.1 keeps the Phase 1 and Phase 2 import path and adds an observability layer:
 
 - discover local rollout files from `~/.codex/sessions/**` and `~/.codex/archived_sessions/**`
 - copy source artifacts into the external archive under `raw/` using content-addressed paths
@@ -8,6 +8,8 @@ Phase 2 keeps the Phase 1 import path and deepens the normalizer:
 - normalize parsed rollout data into event-level SQLite tables
 - resolve workspace identity from observed cwd inputs
 - preserve parent and child agent lineage when local session evidence supports it
+- preserve unmatched spawn intents and orphan child sessions as explicit lineage states
+- expose read-only agent diagnostics and explainability from canonical SQLite rows
 - expose grouped CLI entrypoints for `sync` and `import codex-json`
 
 Workspace resolution currently prefers:
@@ -24,7 +26,11 @@ modes that later report surfaces will use:
 - `alias` when a local alias exists for a workspace
 - `full` only when a caller explicitly opts into full paths
 
-Lineage derivation is conservative. The normalizer creates one primary `agent_runs` row
-per imported session file, promotes child sessions when session metadata shows spawned
-thread evidence, and keeps the deterministic root placeholder only when finer lineage
-cannot be justified from the source data.
+Lineage derivation remains conservative. The normalizer now creates:
+
+- one primary `agent_runs` row per imported session file
+- zero or more spawn-intent `agent_runs` rows when local rollout events explicitly record child spawns
+
+Repair logic resolves exact parent/child matches when the child session appears later, keeps
+spawn-only rows unresolved when the child session never arrives, and keeps child-only rows
+orphaned when no justified parent link exists yet.

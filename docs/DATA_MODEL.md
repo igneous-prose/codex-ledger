@@ -2,8 +2,8 @@
 
 The canonical v1 ledger is event-level and SQLite-backed.
 
-Phase 2 keeps the same event-level canonical ledger and extends the workspace and
-lineage surfaces. The canonical tables are:
+Phase 2.1 keeps the same event-level canonical ledger and extends the workspace,
+lineage, and agent observability surfaces. The canonical tables are:
 
 - `import_batches`
 - `raw_files`
@@ -35,6 +35,21 @@ Current workspace resolution strategies are:
 - `unknown`
 
 `agent_runs` stores one primary run per imported session file in the current implementation.
-When local session evidence shows a spawned child thread, the child run records
-`raw_parent_agent_run_id` and later resolves `parent_agent_run_key` once the parent
-session is present in the ledger.
+Phase 2.1 also stores explicit agent observability fields on `agent_runs`:
+
+- `agent_kind`
+- `requested_model_id`
+- `model_id` as the observed model
+- `lineage_status`
+- `lineage_confidence`
+- `unresolved_reason`
+
+The current canonical lineage states are:
+
+- `resolved`
+- `spawn_only_unmatched`
+- `child_only_orphaned`
+- `root_placeholder`
+
+Parent spawn intents and imported child sessions are both preserved. Spawn rows may have
+zero usage events; event-bearing child runs remain the canonical source of subagent usage.

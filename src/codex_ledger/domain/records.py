@@ -26,6 +26,19 @@ IMPLEMENTED_SOURCE_KINDS: tuple[SourceKind, ...] = (
 )
 
 RedactionMode = Literal["redacted", "alias", "full"]
+AgentKind = Literal["root", "subagent"]
+LineageStatus = Literal[
+    "resolved",
+    "spawn_only_unmatched",
+    "child_only_orphaned",
+    "root_placeholder",
+]
+LineageConfidence = Literal[
+    "exact_spawn_match",
+    "session_metadata_only",
+    "spawn_event_only",
+    "placeholder",
+]
 
 
 @dataclass(frozen=True)
@@ -69,9 +82,14 @@ class AgentRunRecord:
     lineage_key: str
     parent_agent_run_key: str | None
     raw_parent_agent_run_id: str | None
+    agent_kind: AgentKind
     agent_name: str | None
     agent_role: str | None
+    requested_model_id: str | None
     model_id: str | None
+    lineage_status: LineageStatus
+    lineage_confidence: LineageConfidence
+    unresolved_reason: str | None
     started_at_utc: str | None
     ended_at_utc: str | None
     raw_metadata_json: str

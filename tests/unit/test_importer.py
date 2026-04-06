@@ -485,13 +485,18 @@ def test_parent_child_lineage_is_populated_when_source_evidence_exists(tmp_path:
             SELECT sessions.raw_session_id,
                    agent_runs.agent_run_key,
                    agent_runs.parent_agent_run_key,
+                   agent_runs.agent_kind,
                    agent_runs.agent_name,
                    agent_runs.agent_role,
-                   agent_runs.lineage_key
+                   agent_runs.lineage_key,
+                   agent_runs.requested_model_id,
+                   agent_runs.model_id,
+                   agent_runs.lineage_status,
+                   agent_runs.lineage_confidence
             FROM agent_runs
             JOIN provider_sessions AS sessions
               ON sessions.session_key = agent_runs.session_key
-            ORDER BY sessions.raw_session_id
+            ORDER BY sessions.raw_session_id, agent_runs.lineage_key
             """,
         )
         child_event = connection.execute(
@@ -507,24 +512,48 @@ def test_parent_child_lineage_is_populated_when_source_evidence_exists(tmp_path:
     finally:
         connection.close()
 
-    parent_agent_run_key = rows[1][1]
     child_agent_run_key = rows[0][1]
+    parent_root_agent_run_key = rows[1][1]
+    parent_spawn_agent_run_key = rows[2][1]
     assert rows == [
         (
             "child-session",
             child_agent_run_key,
-            parent_agent_run_key,
+            parent_spawn_agent_run_key,
+            "subagent",
             "Researcher",
             "research_worker",
             "session",
+            "gpt-5.4-mini",
+            "gpt-5.4",
+            "resolved",
+            "exact_spawn_match",
         ),
         (
             "parent-session",
-            parent_agent_run_key,
+            parent_root_agent_run_key,
             None,
+            "root",
             "primary",
             "root",
             "root",
+            "gpt-5.4",
+            "gpt-5.4",
+            "root_placeholder",
+            "placeholder",
+        ),
+        (
+            "parent-session",
+            parent_spawn_agent_run_key,
+            parent_root_agent_run_key,
+            "subagent",
+            "Researcher",
+            "research_worker",
+            "spawn:child-session",
+            "gpt-5.4-mini",
+            None,
+            "resolved",
+            "exact_spawn_match",
         ),
     ]
     assert child_event == (child_agent_run_key,)
@@ -545,14 +574,15 @@ def test_root_placeholder_retained_when_no_lineage_evidence_exists(tmp_path: Pat
     try:
         row = connection.execute(
             """
-            SELECT lineage_key, parent_agent_run_key, agent_name, agent_role
+            SELECT lineage_key, parent_agent_run_key, agent_kind, agent_name, agent_role,
+                   lineage_status
             FROM agent_runs
             """
         ).fetchone()
     finally:
         connection.close()
 
-    assert row == ("root", None, "primary", "root")
+    assert row == ("root", None, "root", "primary", "root", "root_placeholder")
 
 
 def test_fixture_files_are_sanitized() -> None:

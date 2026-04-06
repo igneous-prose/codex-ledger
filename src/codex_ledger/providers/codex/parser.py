@@ -5,7 +5,10 @@ from pathlib import Path
 from typing import Any
 
 from codex_ledger.domain.records import (
+    AgentKind,
     AgentRunRecord,
+    LineageConfidence,
+    LineageStatus,
     ParsedFile,
     ProviderSessionRecord,
     SourceKind,
@@ -180,12 +183,13 @@ def _build_parsed_rollout(
     current_turn_id: str | None = None
     current_turn_index: int | None = None
     current_turn_cwd: str | None = None
-    current_model_id: str | None = None
+    current_requested_model: str | None = None
     host = host_override or "standalone_cli"
     provider = provider_override or "codex"
     events: list[UsageEventRecord] = []
     workspaces: dict[str, WorkspaceRecord] = {}
-    models: set[str] = set()
+    observed_models: set[str] = set()
+    requested_models: set[str] = set()
     spawned_children: list[dict[str, str]] = []
 
     for event_index, record in enumerate(records, start=1):
@@ -203,13 +207,18 @@ def _build_parsed_rollout(
             current_turn_index = (current_turn_index or 0) + 1
             current_turn_id = _clean_str(payload.get("turn_id"))
             current_turn_cwd = _clean_str(payload.get("cwd")) or _nested_turn_context_cwd(payload)
-            current_model_id = _clean_str(payload.get("model")) or _clean_str(
+            current_requested_model = _clean_str(payload.get("model")) or _clean_str(
                 payload.get("model_id")
             )
+            if current_requested_model is not None:
+                requested_models.add(current_requested_model)
 
-        spawned_child = _extract_spawned_child(payload)
+        spawned_child = _extract_spawned_child(record, payload)
         if spawned_child is not None:
             spawned_children.append(spawned_child)
+            requested_model = spawned_child.get("requested_model_id")
+            if requested_model is not None:
+                requested_models.add(requested_model)
 
         session_cwd = _clean_str(session_payload.get("cwd"))
         raw_cwd = _extract_event_cwd(record_type, payload, current_turn_cwd)
@@ -219,10 +228,10 @@ def _build_parsed_rollout(
         model_id = (
             _clean_str(payload.get("model_id"))
             or _clean_str(payload.get("model"))
-            or current_model_id
+            or current_requested_model
         )
         if model_id:
-            models.add(model_id)
+            observed_models.add(model_id)
 
         usage = _extract_usage(payload)
         raw_timestamp = _clean_str(record.get("timestamp"))
@@ -272,8 +281,17 @@ def _build_parsed_rollout(
         session=session,
         session_payload=session_payload,
         source_kind=source_kind,
-        models=tuple(sorted(models)),
+        requested_models=tuple(sorted(requested_models)),
+        observed_models=tuple(sorted(observed_models)),
         spawned_children=tuple(spawned_children),
+    )
+    spawn_agent_runs = tuple(
+        _build_spawn_agent_run(
+            session=session,
+            parent_agent_run_key=primary_agent.agent_run_key,
+            spawned_child=spawned_child,
+        )
+        for spawned_child in spawned_children
     )
     attributed_events = tuple(
         _assign_event_agent_run_key(event, primary_agent.agent_run_key) for event in events
@@ -287,10 +305,10 @@ def _build_parsed_rollout(
         parse_status="parsed",
         parse_error=None,
         session=session,
-        agent_runs=(primary_agent,),
+        agent_runs=(primary_agent, *spawn_agent_runs),
         events=attributed_events,
         workspaces=tuple(sorted(workspaces.values(), key=lambda item: item.workspace_key)),
-        model_ids=tuple(sorted(models)),
+        model_ids=tuple(sorted(observed_models | requested_models)),
     )
 
 
@@ -299,7 +317,8 @@ def _build_primary_agent_run(
     session: ProviderSessionRecord,
     session_payload: dict[str, Any],
     source_kind: SourceKind,
-    models: tuple[str, ...],
+    requested_models: tuple[str, ...],
+    observed_models: tuple[str, ...],
     spawned_children: tuple[dict[str, str], ...],
 ) -> AgentRunRecord:
     parent_raw_session_id = _extract_parent_session_id(session_payload)
@@ -313,16 +332,22 @@ def _build_primary_agent_run(
 
     if parent_raw_session_id is not None or agent_name is not None or agent_role is not None:
         lineage_key = "session"
-        lineage_label = "derived_session"
+        agent_kind: AgentKind = "subagent"
+        lineage_status: LineageStatus = "child_only_orphaned"
+        lineage_confidence: LineageConfidence = "session_metadata_only"
+        unresolved_reason = "parent_session_missing"
     else:
         lineage_key = "root"
-        lineage_label = "placeholder_root"
+        agent_kind = "root"
+        lineage_status = "root_placeholder"
+        lineage_confidence = "placeholder"
+        unresolved_reason = None
         agent_name = "primary"
         agent_role = "root"
 
     metadata: dict[str, Any] = {
         "source_kind": source_kind,
-        "lineage": lineage_label,
+        "spawned_child_count": len(spawned_children),
     }
     if parent_raw_session_id is not None:
         metadata["parent_raw_session_id"] = parent_raw_session_id
@@ -337,12 +362,45 @@ def _build_primary_agent_run(
         lineage_key=lineage_key,
         parent_agent_run_key=None,
         raw_parent_agent_run_id=parent_raw_session_id,
+        agent_kind=agent_kind,
         agent_name=agent_name,
         agent_role=agent_role,
-        model_id=_first(models),
+        requested_model_id=_first(requested_models) or _first(observed_models),
+        model_id=_first(observed_models),
+        lineage_status=lineage_status,
+        lineage_confidence=lineage_confidence,
+        unresolved_reason=unresolved_reason,
         started_at_utc=session.session_started_at_utc,
         ended_at_utc=session.session_ended_at_utc,
         raw_metadata_json=canonical_json(metadata),
+    )
+
+
+def _build_spawn_agent_run(
+    *,
+    session: ProviderSessionRecord,
+    parent_agent_run_key: str,
+    spawned_child: dict[str, str],
+) -> AgentRunRecord:
+    child_thread_id = spawned_child["child_thread_id"]
+    metadata = canonical_json(spawned_child)
+    return AgentRunRecord(
+        agent_run_key=sha256_text(f"{session.session_key}:spawn:{child_thread_id}")[:32],
+        session_key=session.session_key,
+        lineage_key=f"spawn:{child_thread_id}",
+        parent_agent_run_key=parent_agent_run_key,
+        raw_parent_agent_run_id=session.raw_session_id,
+        agent_kind="subagent",
+        agent_name=spawned_child.get("agent_name"),
+        agent_role=spawned_child.get("agent_role"),
+        requested_model_id=spawned_child.get("requested_model_id"),
+        model_id=None,
+        lineage_status="spawn_only_unmatched",
+        lineage_confidence="spawn_event_only",
+        unresolved_reason="child_session_missing",
+        started_at_utc=spawned_child.get("started_at_utc"),
+        ended_at_utc=spawned_child.get("started_at_utc"),
+        raw_metadata_json=metadata,
     )
 
 
@@ -396,7 +454,10 @@ def _nested_turn_context_cwd(payload: dict[str, Any]) -> str | None:
     return None
 
 
-def _extract_spawned_child(payload: dict[str, Any]) -> dict[str, str] | None:
+def _extract_spawned_child(
+    record: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, str] | None:
     if _clean_str(payload.get("type")) != "collab_agent_spawn_end":
         return None
 
@@ -404,17 +465,21 @@ def _extract_spawned_child(payload: dict[str, Any]) -> dict[str, str] | None:
     if child_thread_id is None:
         return None
 
-    child: dict[str, str] = {"thread_id": child_thread_id}
+    child: dict[str, str] = {"child_thread_id": child_thread_id}
     for key, out_key in (
         ("new_agent_nickname", "agent_name"),
         ("new_agent_role", "agent_role"),
-        ("model", "model_id"),
+        ("model", "requested_model_id"),
         ("sender_thread_id", "parent_thread_id"),
         ("reasoning_effort", "reasoning_effort"),
+        ("status", "spawn_status"),
     ):
         value = _clean_str(payload.get(key))
         if value is not None:
             child[out_key] = value
+    timestamp = normalize_timestamp(_clean_str(record.get("timestamp")))
+    if timestamp is not None:
+        child["started_at_utc"] = timestamp
     return child
 
 

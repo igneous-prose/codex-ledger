@@ -397,16 +397,21 @@ def upsert_agent_run(
             parse_status,
             parent_agent_run_key,
             raw_parent_agent_run_id,
+            agent_kind,
             agent_name,
             agent_role,
+            requested_model_id,
             model_id,
+            lineage_status,
+            lineage_confidence,
+            unresolved_reason,
             started_at_utc,
             ended_at_utc,
             raw_metadata_json,
             created_at_utc,
             updated_at_utc
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_key, lineage_key) DO UPDATE SET
             parent_agent_run_key = COALESCE(
                 excluded.parent_agent_run_key,
@@ -416,9 +421,17 @@ def upsert_agent_run(
                 excluded.raw_parent_agent_run_id,
                 agent_runs.raw_parent_agent_run_id
             ),
+            agent_kind = COALESCE(agent_runs.agent_kind, excluded.agent_kind),
             agent_name = COALESCE(agent_runs.agent_name, excluded.agent_name),
             agent_role = COALESCE(agent_runs.agent_role, excluded.agent_role),
+            requested_model_id = COALESCE(
+                agent_runs.requested_model_id,
+                excluded.requested_model_id
+            ),
             model_id = COALESCE(agent_runs.model_id, excluded.model_id),
+            lineage_status = excluded.lineage_status,
+            lineage_confidence = excluded.lineage_confidence,
+            unresolved_reason = excluded.unresolved_reason,
             started_at_utc = COALESCE(agent_runs.started_at_utc, excluded.started_at_utc),
             ended_at_utc = CASE
                 WHEN agent_runs.ended_at_utc IS NULL THEN excluded.ended_at_utc
@@ -441,9 +454,14 @@ def upsert_agent_run(
             parse_status,
             agent_run.parent_agent_run_key,
             agent_run.raw_parent_agent_run_id,
+            agent_run.agent_kind,
             agent_run.agent_name,
             agent_run.agent_role,
+            agent_run.requested_model_id,
             agent_run.model_id,
+            agent_run.lineage_status,
+            agent_run.lineage_confidence,
+            agent_run.unresolved_reason,
             agent_run.started_at_utc,
             agent_run.ended_at_utc,
             agent_run.raw_metadata_json,
@@ -549,27 +567,131 @@ def insert_usage_events(
 
 
 def repair_agent_run_lineage(connection: sqlite3.Connection) -> int:
+    repaired = 0
     cursor = connection.execute(
         """
-        UPDATE agent_runs
+        UPDATE agent_runs AS child
+        SET parent_agent_run_key = (
+                SELECT spawn.agent_run_key
+                FROM provider_sessions AS parent_session
+                JOIN agent_runs AS spawn
+                  ON spawn.session_key = parent_session.session_key
+                JOIN provider_sessions AS child_session
+                  ON child_session.session_key = child.session_key
+                WHERE parent_session.raw_session_id = child.raw_parent_agent_run_id
+                  AND spawn.lineage_key = 'spawn:' || child_session.raw_session_id
+                LIMIT 1
+            ),
+            requested_model_id = COALESCE(
+                (
+                    SELECT spawn.requested_model_id
+                    FROM provider_sessions AS parent_session
+                    JOIN agent_runs AS spawn
+                      ON spawn.session_key = parent_session.session_key
+                    JOIN provider_sessions AS child_session
+                      ON child_session.session_key = child.session_key
+                    WHERE parent_session.raw_session_id = child.raw_parent_agent_run_id
+                      AND spawn.lineage_key = 'spawn:' || child_session.raw_session_id
+                    LIMIT 1
+                ),
+                child.requested_model_id
+            ),
+            lineage_status = 'resolved',
+            lineage_confidence = 'exact_spawn_match',
+            unresolved_reason = NULL
+        WHERE child.agent_kind = 'subagent'
+          AND child.lineage_key = 'session'
+          AND child.raw_parent_agent_run_id IS NOT NULL
+          AND EXISTS (
+                SELECT 1
+                FROM provider_sessions AS parent_session
+                JOIN agent_runs AS spawn
+                  ON spawn.session_key = parent_session.session_key
+                JOIN provider_sessions AS child_session
+                  ON child_session.session_key = child.session_key
+                WHERE parent_session.raw_session_id = child.raw_parent_agent_run_id
+                  AND spawn.lineage_key = 'spawn:' || child_session.raw_session_id
+          )
+        """
+    )
+    repaired += int(cursor.rowcount or 0)
+
+    cursor = connection.execute(
+        """
+        UPDATE agent_runs AS spawn
+        SET lineage_status = 'resolved',
+            lineage_confidence = 'exact_spawn_match',
+            unresolved_reason = NULL
+        WHERE spawn.lineage_key LIKE 'spawn:%'
+          AND EXISTS (
+                SELECT 1
+                FROM provider_sessions AS child_session
+                WHERE child_session.raw_session_id = SUBSTR(spawn.lineage_key, 7)
+          )
+        """
+    )
+    repaired += int(cursor.rowcount or 0)
+
+    cursor = connection.execute(
+        """
+        UPDATE agent_runs AS child
         SET parent_agent_run_key = (
             SELECT parent_run.agent_run_key
             FROM provider_sessions AS parent_session
             JOIN agent_runs AS parent_run
               ON parent_run.session_key = parent_session.session_key
-            WHERE parent_session.raw_session_id = agent_runs.raw_parent_agent_run_id
-            ORDER BY parent_run.created_at_utc
+            WHERE parent_session.raw_session_id = child.raw_parent_agent_run_id
+              AND parent_run.lineage_key IN ('session', 'root')
+            ORDER BY CASE parent_run.lineage_key WHEN 'session' THEN 0 ELSE 1 END
             LIMIT 1
-        )
-        WHERE parent_agent_run_key IS NULL
-          AND raw_parent_agent_run_id IS NOT NULL
+        ),
+            lineage_status = 'resolved',
+            lineage_confidence = 'session_metadata_only',
+            unresolved_reason = NULL
+        WHERE child.agent_kind = 'subagent'
+          AND child.lineage_key = 'session'
+          AND child.parent_agent_run_key IS NULL
+          AND child.raw_parent_agent_run_id IS NOT NULL
           AND EXISTS (
             SELECT 1
             FROM provider_sessions AS parent_session
             JOIN agent_runs AS parent_run
               ON parent_run.session_key = parent_session.session_key
-            WHERE parent_session.raw_session_id = agent_runs.raw_parent_agent_run_id
+            WHERE parent_session.raw_session_id = child.raw_parent_agent_run_id
+              AND parent_run.lineage_key IN ('session', 'root')
           )
         """
     )
-    return int(cursor.rowcount or 0)
+    repaired += int(cursor.rowcount or 0)
+
+    cursor = connection.execute(
+        """
+        UPDATE agent_runs
+        SET lineage_status = 'child_only_orphaned',
+            lineage_confidence = 'session_metadata_only',
+            unresolved_reason = 'parent_session_missing'
+        WHERE agent_kind = 'subagent'
+          AND lineage_key = 'session'
+          AND raw_parent_agent_run_id IS NOT NULL
+          AND parent_agent_run_key IS NULL
+        """
+    )
+    repaired += int(cursor.rowcount or 0)
+
+    cursor = connection.execute(
+        """
+        UPDATE agent_runs
+        SET lineage_status = 'spawn_only_unmatched',
+            lineage_confidence = 'spawn_event_only',
+            unresolved_reason = 'child_session_missing'
+        WHERE lineage_key LIKE 'spawn:%'
+          AND parent_agent_run_key IS NOT NULL
+          AND NOT EXISTS (
+                SELECT 1
+                FROM provider_sessions AS child_session
+                WHERE child_session.raw_session_id = SUBSTR(agent_runs.lineage_key, 7)
+          )
+        """
+    )
+    repaired += int(cursor.rowcount or 0)
+    return repaired

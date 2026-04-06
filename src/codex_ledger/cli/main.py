@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections.abc import Sequence
+from datetime import date
 from pathlib import Path
 
 from codex_ledger import __version__
@@ -12,6 +13,12 @@ from codex_ledger.ingest.service import (
     sync_local_codex,
 )
 from codex_ledger.paths import ensure_archive_home_layout, resolve_archive_home
+from codex_ledger.reports.agents import (
+    build_agent_report,
+    explain_agent_run,
+    format_agent_explain_table,
+    format_agent_report_table,
+)
 from codex_ledger.storage.migrations import apply_migrations, default_database_path
 
 
@@ -57,6 +64,79 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the archive home directory for this run.",
     )
     import_codex_parser.set_defaults(handler=run_import_codex_json)
+
+    report_parser = subparsers.add_parser(
+        "report",
+        help="Read diagnostic summaries from the canonical ledger.",
+    )
+    report_subparsers = report_parser.add_subparsers(dest="report_command")
+    report_agents_parser = report_subparsers.add_parser(
+        "agents",
+        help="Show agent and subagent token and lineage diagnostics.",
+    )
+    report_agents_parser.add_argument(
+        "--period",
+        choices=("day", "week", "month", "year"),
+        required=True,
+        help="UTC reporting window kind.",
+    )
+    report_agents_parser.add_argument(
+        "--as-of",
+        required=True,
+        type=_parse_date,
+        help="UTC report anchor date in YYYY-MM-DD format.",
+    )
+    report_agents_parser.add_argument(
+        "--format",
+        choices=("json", "table"),
+        default="table",
+        help="Output format.",
+    )
+    report_agents_parser.add_argument(
+        "--redaction-mode",
+        choices=("redacted", "alias", "full"),
+        default="redacted",
+        help="Workspace label representation.",
+    )
+    report_agents_parser.add_argument(
+        "--archive-home",
+        type=Path,
+        help="Override the archive home directory for this run.",
+    )
+    report_agents_parser.set_defaults(handler=run_report_agents)
+
+    explain_parser = subparsers.add_parser(
+        "explain",
+        help="Explain canonical lineage and provenance records.",
+    )
+    explain_subparsers = explain_parser.add_subparsers(dest="explain_command")
+    explain_agent_parser = explain_subparsers.add_parser(
+        "agent",
+        help="Trace one agent run back to its canonical provenance.",
+    )
+    explain_agent_parser.add_argument(
+        "--agent-run",
+        required=True,
+        help="Agent run key to explain.",
+    )
+    explain_agent_parser.add_argument(
+        "--format",
+        choices=("json", "table"),
+        default="table",
+        help="Output format.",
+    )
+    explain_agent_parser.add_argument(
+        "--redaction-mode",
+        choices=("redacted", "alias", "full"),
+        default="redacted",
+        help="Workspace label representation.",
+    )
+    explain_agent_parser.add_argument(
+        "--archive-home",
+        type=Path,
+        help="Override the archive home directory for this run.",
+    )
+    explain_agent_parser.set_defaults(handler=run_explain_agent)
 
     doctor_parser = subparsers.add_parser(
         "doctor",
@@ -151,6 +231,35 @@ def run_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_report_agents(args: argparse.Namespace) -> int:
+    archive_home = _resolve_archive_home_argument(args.archive_home)
+    payload = build_agent_report(
+        archive_home=archive_home,
+        period=args.period,
+        as_of=args.as_of,
+        redaction_mode=args.redaction_mode,
+    )
+    if args.format == "json":
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(format_agent_report_table(payload))
+    return 0
+
+
+def run_explain_agent(args: argparse.Namespace) -> int:
+    archive_home = _resolve_archive_home_argument(args.archive_home)
+    payload = explain_agent_run(
+        archive_home=archive_home,
+        agent_run_key=args.agent_run,
+        redaction_mode=args.redaction_mode,
+    )
+    if args.format == "json":
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(format_agent_explain_table(payload))
+    return 0
+
+
 def run_migrate(args: argparse.Namespace) -> int:
     if args.database is not None:
         database_path = args.database.expanduser().resolve(strict=False)
@@ -174,6 +283,10 @@ def _resolve_archive_home_argument(archive_home: Path | None) -> Path:
     if archive_home is not None:
         return archive_home.expanduser().resolve(strict=False)
     return resolve_archive_home()
+
+
+def _parse_date(value: str) -> date:
+    return date.fromisoformat(value)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

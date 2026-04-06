@@ -15,3 +15,7 @@ The implemented workspace label modes are:
 
 Absolute paths remain ledger-internal by default. The current implementation does not
 emit them in default CLI output, fixtures, or docs examples.
+
+Phase 2.1 agent diagnostics and explainability commands also default to redacted workspace
+labels. They expose canonical IDs, token totals, lineage status, requested and observed
+models, and stored raw artifact relpaths without defaulting to absolute workspace paths.

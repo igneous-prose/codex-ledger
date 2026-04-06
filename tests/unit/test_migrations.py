@@ -15,6 +15,7 @@ def test_apply_migrations_creates_schema_tracking_table(tmp_path: Path) -> None:
         "0001_initial.sql",
         "0002_phase1_ledger.sql",
         "0003_phase2_workspace_lineage.sql",
+        "0004_phase21_agent_observability.sql",
     ]
 
     connection = sqlite3.connect(database_path)
@@ -32,6 +33,7 @@ def test_apply_migrations_creates_schema_tracking_table(tmp_path: Path) -> None:
         ("0001", "0001_initial.sql"),
         ("0002", "0002_phase1_ledger.sql"),
         ("0003", "0003_phase2_workspace_lineage.sql"),
+        ("0004", "0004_phase21_agent_observability.sql"),
     ]
     assert {
         "agent_runs",
