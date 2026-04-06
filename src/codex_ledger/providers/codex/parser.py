@@ -197,16 +197,12 @@ def _build_parsed_rollout(
         if record_type == "session_meta":
             session_payload = payload
             host = (
-                _clean_str(payload.get("source"))
-                or _clean_str(payload.get("originator"))
-                or host
+                _clean_str(payload.get("source")) or _clean_str(payload.get("originator")) or host
             )
         elif record_type == "turn_context":
             current_turn_index = (current_turn_index or 0) + 1
             current_turn_id = _clean_str(payload.get("turn_id"))
-            current_turn_cwd = _clean_str(payload.get("cwd")) or _nested_turn_context_cwd(
-                payload
-            )
+            current_turn_cwd = _clean_str(payload.get("cwd")) or _nested_turn_context_cwd(payload)
             current_model_id = _clean_str(payload.get("model")) or _clean_str(
                 payload.get("model_id")
             )
