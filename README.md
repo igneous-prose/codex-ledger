@@ -6,9 +6,10 @@ reproducible derived outputs.
 
 ## Status
 
-This repository is currently at Phase 0 of the implementation brief: scaffold,
-guardrails, minimal CLI, migration runner skeleton, CI, and documentation stubs are in
-place. Import, normalization, pricing, and report generation land in later phases.
+This repository is currently at Phase 1 of the implementation brief: the scaffold,
+canonical SQLite ledger, immutable raw archive, local rollout import, explicit JSON
+import, grouped CLI commands, and regression tests are in place. Pricing, reports, HTML,
+PNG rendering, and reconciliation remain later-phase work.
 
 ## What problem it solves
 
@@ -29,13 +30,25 @@ When packaged, the intended install surface is `pipx install codex-ledger`.
 
 ## Quickstart
 
-Inspect the current local environment:
+Inspect the current local environment and migration status:
 
 ```bash
 uv run codex-ledger doctor
 ```
 
-Initialize the archive-home directory structure and apply the initial migration:
+Import locally persisted rollout files:
+
+```bash
+uv run codex-ledger sync
+```
+
+Import an explicit JSON report file:
+
+```bash
+uv run codex-ledger import codex-json --input ./sample-report.json
+```
+
+Initialize the archive-home directory structure and apply migrations:
 
 ```bash
 uv run codex-ledger migrate
@@ -53,15 +66,17 @@ uv build
 
 ## Privacy defaults
 
-The ledger architecture is designed to retain raw provenance locally while defaulting
-public outputs to redacted workspace labels. Phase 0 does not generate public reports
-yet, but the docs and command surface are structured around that default.
+The ledger retains raw provenance locally, including original source paths inside the
+SQLite ledger. Public report-generation features are not implemented yet, but workspace
+records already include redacted labels so later outputs can default to privacy-safe
+presentation.
 
 ## Examples
 
 ```bash
 uv run codex-ledger --help
 uv run codex-ledger doctor --json
+uv run codex-ledger sync --full-backfill
 uv run codex-ledger migrate --database /tmp/codex-ledger.sqlite3
 ```
 
@@ -74,7 +89,9 @@ The v1 design targets:
 - user-provided JSON backfill files
 - user-provided machine-readable Codex JSON outputs
 
-Phase 0 only scaffolds the project and does not ingest these sources yet.
+Phase 1 implements `local_rollout_file` and `imported_json_report`. The other planned
+source kinds already exist in schema and command validation, but their import paths are
+not implemented yet.
 
 ## Scope
 

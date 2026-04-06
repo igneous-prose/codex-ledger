@@ -1,0 +1,23 @@
+{
+  "provider": "codex",
+  "host": "imported_json",
+  "session": {
+    "id": "imported-session-model-path",
+    "timestamp": "2026-04-04T10:59:50Z",
+    "cwd": "workspace-model/project",
+    "originator": "Imported",
+    "cli_version": "0.120.0"
+  },
+  "events": [
+    {
+      "timestamp": "2026-04-04T11:00:00Z",
+      "type": "turn_context",
+      "turn_id": "import-turn-model",
+      "turn_index": 1,
+      "turn_context": {
+        "cwd": "workspace-model/project/task"
+      },
+      "model_id": "provider/model-like/path"
+    }
+  ]
+}

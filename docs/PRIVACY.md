@@ -1,5 +1,6 @@
 # Privacy
 
-Codex Ledger is designed to keep sensitive provenance locally while defaulting outward
-artifacts to redacted workspace labels. Absolute paths remain local-only unless a user
-explicitly requests less redaction in later report phases.
+Codex Ledger keeps sensitive provenance locally and already stores both workspace display
+labels and redacted labels in the ledger. Phase 1 imports preserve original source paths
+and raw workspace inputs internally, while future report phases will default outward
+artifacts to the redacted labels.

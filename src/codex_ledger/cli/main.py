@@ -6,7 +6,12 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from codex_ledger import __version__
-from codex_ledger.paths import archive_home_layout, ensure_archive_home_layout, resolve_archive_home
+from codex_ledger.ingest.service import (
+    import_codex_json_report,
+    summarize_doctor_status,
+    sync_local_codex,
+)
+from codex_ledger.paths import ensure_archive_home_layout, resolve_archive_home
 from codex_ledger.storage.migrations import apply_migrations, default_database_path
 
 
@@ -18,9 +23,49 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command")
 
+    sync_parser = subparsers.add_parser(
+        "sync",
+        help="Import local Codex rollout files into the canonical ledger.",
+    )
+    sync_parser.add_argument(
+        "--full-backfill",
+        action="store_true",
+        help="Reprocess already archived raw files instead of skipping known hashes.",
+    )
+    sync_parser.add_argument(
+        "--archive-home",
+        type=Path,
+        help="Override the archive home directory for this run.",
+    )
+    sync_parser.set_defaults(handler=run_sync)
+
+    import_parser = subparsers.add_parser(
+        "import",
+        help="Import explicit files into the canonical ledger.",
+    )
+    import_subparsers = import_parser.add_subparsers(dest="import_command")
+    import_codex_parser = import_subparsers.add_parser(
+        "codex-json",
+        help="Import an explicit Codex JSON report file.",
+    )
+    import_codex_parser.add_argument(
+        "--input", type=Path, required=True, help="Path to the JSON file."
+    )
+    import_codex_parser.add_argument(
+        "--archive-home",
+        type=Path,
+        help="Override the archive home directory for this run.",
+    )
+    import_codex_parser.set_defaults(handler=run_import_codex_json)
+
     doctor_parser = subparsers.add_parser(
         "doctor",
         help="Inspect local archive-home and expected discovery paths.",
+    )
+    doctor_parser.add_argument(
+        "--archive-home",
+        type=Path,
+        help="Override the archive home directory for this run.",
     )
     doctor_parser.add_argument(
         "--json",
@@ -39,44 +84,70 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Override the SQLite database path.",
     )
+    migrate_parser.add_argument(
+        "--archive-home",
+        type=Path,
+        help="Override the archive home directory for this run.",
+    )
     migrate_parser.set_defaults(handler=run_migrate)
 
     return parser
 
 
+def run_sync(args: argparse.Namespace) -> int:
+    archive_home = _resolve_archive_home_argument(args.archive_home)
+    summary, outcomes = sync_local_codex(
+        archive_home=archive_home,
+        full_backfill=bool(args.full_backfill),
+    )
+    print(f"Batch: {summary.batch_id}")
+    print(f"Manifest: {summary.manifest_relpath}")
+    print(f"Scanned files: {summary.scanned_file_count}")
+    print(f"Imported files: {summary.imported_file_count}")
+    print(f"Skipped files: {summary.skipped_file_count}")
+    print(f"Failed files: {summary.failed_file_count}")
+    for outcome in outcomes:
+        print(f"{outcome.status}: {outcome.source_path}")
+    return 0 if summary.failed_file_count == 0 else 1
+
+
+def run_import_codex_json(args: argparse.Namespace) -> int:
+    archive_home = _resolve_archive_home_argument(args.archive_home)
+    summary, outcomes = import_codex_json_report(
+        archive_home=archive_home,
+        input_path=args.input,
+    )
+    print(f"Batch: {summary.batch_id}")
+    for outcome in outcomes:
+        print(f"{outcome.status}: {outcome.source_path}")
+        if outcome.detail:
+            print(f"detail: {outcome.detail}")
+    return 0 if summary.failed_file_count == 0 else 1
+
+
 def run_doctor(args: argparse.Namespace) -> int:
-    home = resolve_archive_home()
-    layout = archive_home_layout(home)
-    expected_layout = {name: str(path) for name, path in layout.items()}
-    source_roots = [
-        {
-            "path": str(Path("~/.codex/sessions").expanduser()),
-            "exists": Path("~/.codex/sessions").expanduser().exists(),
-        },
-        {
-            "path": str(Path("~/.codex/archived_sessions").expanduser()),
-            "exists": Path("~/.codex/archived_sessions").expanduser().exists(),
-        },
-    ]
-    payload = {
-        "archive_home": str(home),
-        "archive_home_exists": home.exists(),
-        "database_path": str(default_database_path(home)),
-        "expected_layout": expected_layout,
-        "source_roots": source_roots,
-    }
+    home = _resolve_archive_home_argument(args.archive_home)
+    payload = summarize_doctor_status(home)
 
     if args.as_json:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
     print(f"Archive home: {payload['archive_home']}")
-    print(f"Archive home exists: {payload['archive_home_exists']}")
     print(f"Database path: {payload['database_path']}")
-    for name, path in expected_layout.items():
+    print(f"History persistence: {payload['history_persistence_status']}")
+    for name, path in payload["expected_layout"].items():
         print(f"{name}: {path}")
-    for source in source_roots:
-        print(f"source: {source['path']} (exists={source['exists']})")
+    for source in payload["source_roots"]:
+        print(
+            "source: "
+            f"{source['path']} "
+            f"(exists={source['exists']}, jsonl_count={source['jsonl_count']})"
+        )
+    applied = ", ".join(payload["migration_status"]["applied"]) or "none"
+    pending = ", ".join(payload["migration_status"]["pending"]) or "none"
+    print(f"Applied migrations: {applied}")
+    print(f"Pending migrations: {pending}")
     return 0
 
 
@@ -85,7 +156,7 @@ def run_migrate(args: argparse.Namespace) -> int:
         database_path = args.database.expanduser().resolve(strict=False)
         database_path.parent.mkdir(parents=True, exist_ok=True)
     else:
-        archive_home = resolve_archive_home()
+        archive_home = _resolve_archive_home_argument(args.archive_home)
         ensure_archive_home_layout(archive_home)
         database_path = default_database_path(archive_home)
 
@@ -97,6 +168,12 @@ def run_migrate(args: argparse.Namespace) -> int:
     else:
         print(f"No pending migrations for {database_path}")
     return 0
+
+
+def _resolve_archive_home_argument(archive_home: Path | None) -> Path:
+    if archive_home is not None:
+        return archive_home.expanduser().resolve(strict=False)
+    return resolve_archive_home()
 
 
 def main(argv: Sequence[str] | None = None) -> int:

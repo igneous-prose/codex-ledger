@@ -1,0 +1,37 @@
+{
+  "provider": "codex",
+  "host": "imported_json",
+  "session": {
+    "id": "imported-session-alpha",
+    "timestamp": "2026-04-03T11:59:50Z",
+    "cwd": "workspace-import/project",
+    "originator": "Imported",
+    "cli_version": "0.120.0"
+  },
+  "events": [
+    {
+      "timestamp": "2026-04-03T12:00:00Z",
+      "type": "turn_context",
+      "turn_id": "import-turn-1",
+      "turn_index": 1,
+      "turn_context": {
+        "cwd": "workspace-import/project/task"
+      },
+      "model_id": "gpt-5.4"
+    },
+    {
+      "timestamp": "2026-04-03T12:00:01Z",
+      "type": "usage",
+      "event_type": "token_count",
+      "turn_id": "import-turn-1",
+      "turn_index": 1,
+      "usage": {
+        "input_tokens": 11,
+        "cached_input_tokens": 1,
+        "output_tokens": 5,
+        "reasoning_output_tokens": 2,
+        "total_tokens": 16
+      }
+    }
+  ]
+}

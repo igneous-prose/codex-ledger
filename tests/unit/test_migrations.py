@@ -11,17 +11,33 @@ def test_apply_migrations_creates_schema_tracking_table(tmp_path: Path) -> None:
 
     applied = apply_migrations(database_path)
 
-    assert applied == ["0001_initial.sql"]
+    assert applied == ["0001_initial.sql", "0002_phase1_ledger.sql"]
 
     connection = sqlite3.connect(database_path)
     try:
         rows = connection.execute(
             "SELECT version, name FROM schema_migrations ORDER BY version"
         ).fetchall()
+        tables = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
+        ).fetchall()
     finally:
         connection.close()
 
-    assert rows == [("0001", "0001_initial.sql")]
+    assert rows == [
+        ("0001", "0001_initial.sql"),
+        ("0002", "0002_phase1_ledger.sql"),
+    ]
+    assert {
+        "agent_runs",
+        "import_batches",
+        "models",
+        "provider_sessions",
+        "raw_files",
+        "schema_migrations",
+        "usage_events",
+        "workspaces",
+    }.issubset({str(row[0]) for row in tables})
 
 
 def test_apply_migrations_is_idempotent(tmp_path: Path) -> None:

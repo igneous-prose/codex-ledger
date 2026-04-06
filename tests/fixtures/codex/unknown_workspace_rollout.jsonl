@@ -1,0 +1,2 @@
+{"timestamp":"2026-04-02T10:00:00Z","type":"session_meta","payload":{"id":"session-unknown","timestamp":"2026-04-02T09:59:55Z","originator":"Desktop","cli_version":"0.120.0","source":"desktop"}}
+{"timestamp":"2026-04-02T10:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":7,"cached_input_tokens":0,"output_tokens":3,"reasoning_output_tokens":0,"total_tokens":10}}}}

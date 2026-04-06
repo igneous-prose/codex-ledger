@@ -46,6 +46,10 @@ def migration_files() -> list[tuple[str, Traversable]]:
     return sorted((item.name, item) for item in files)
 
 
+def migration_filenames() -> list[str]:
+    return [filename for filename, _ in migration_files()]
+
+
 def apply_migrations(database_path: Path) -> list[str]:
     database_path.parent.mkdir(parents=True, exist_ok=True)
     applied: list[str] = []
