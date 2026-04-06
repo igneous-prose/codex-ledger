@@ -13,3 +13,5 @@ htmlcov/
 *.sqlite3
 *.db
 uv.lock
+codex-ledger-implementation-brief.md
+codex-ledger-implementation-brief-v2.md
