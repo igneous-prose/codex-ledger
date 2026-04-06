@@ -1,0 +1,4 @@
+{"timestamp":"2026-04-05T09:00:00Z","type":"session_meta","payload":{"id":"parent-session","timestamp":"2026-04-05T08:59:55Z","cwd":"workspace-lineage/project","originator":"Desktop","cli_version":"0.120.0","source":"desktop"}}
+{"timestamp":"2026-04-05T09:00:01Z","type":"turn_context","payload":{"turn_id":"parent-turn-1","cwd":"workspace-lineage/project/app","model":"gpt-5.4"}}
+{"timestamp":"2026-04-05T09:00:02Z","type":"event_msg","payload":{"type":"collab_agent_spawn_end","sender_thread_id":"parent-session","new_thread_id":"child-session","new_agent_nickname":"Researcher","new_agent_role":"research_worker","model":"gpt-5.4-mini","reasoning_effort":"medium","status":"pending_init"}}
+{"timestamp":"2026-04-05T09:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":12,"cached_input_tokens":1,"output_tokens":4,"reasoning_output_tokens":1,"total_tokens":16}}}}

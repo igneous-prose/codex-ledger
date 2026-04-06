@@ -198,6 +198,7 @@ def upsert_workspace(connection: sqlite3.Connection, workspace: WorkspaceRecord)
         """
         INSERT INTO workspaces (
             workspace_key,
+            raw_cwd,
             resolved_root_path,
             resolved_root_path_hash,
             display_label,
@@ -206,8 +207,9 @@ def upsert_workspace(connection: sqlite3.Connection, workspace: WorkspaceRecord)
             first_seen_at_utc,
             last_seen_at_utc
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(workspace_key) DO UPDATE SET
+            raw_cwd = COALESCE(workspaces.raw_cwd, excluded.raw_cwd),
             resolved_root_path = excluded.resolved_root_path,
             display_label = excluded.display_label,
             redacted_display_label = excluded.redacted_display_label,
@@ -216,6 +218,7 @@ def upsert_workspace(connection: sqlite3.Connection, workspace: WorkspaceRecord)
         """,
         (
             workspace.workspace_key,
+            workspace.raw_cwd,
             workspace.resolved_root_path,
             workspace.resolved_root_path_hash,
             workspace.display_label,
@@ -225,6 +228,41 @@ def upsert_workspace(connection: sqlite3.Connection, workspace: WorkspaceRecord)
             now,
         ),
     )
+
+
+def upsert_workspace_alias(
+    connection: sqlite3.Connection,
+    *,
+    workspace_key: str,
+    alias_label: str,
+) -> None:
+    now = utc_now_iso()
+    connection.execute(
+        """
+        INSERT INTO workspace_aliases (
+            workspace_key,
+            alias_label,
+            created_at_utc,
+            updated_at_utc
+        )
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(workspace_key) DO UPDATE SET
+            alias_label = excluded.alias_label,
+            updated_at_utc = excluded.updated_at_utc
+        """,
+        (workspace_key, alias_label, now, now),
+    )
+
+
+def fetch_workspace_alias_map(connection: sqlite3.Connection) -> dict[str, str]:
+    rows = connection.execute(
+        """
+        SELECT workspace_key, alias_label
+        FROM workspace_aliases
+        ORDER BY workspace_key
+        """
+    ).fetchall()
+    return {str(row[0]): str(row[1]) for row in rows}
 
 
 def upsert_model(connection: sqlite3.Connection, *, model_id: str, provider: str) -> None:
@@ -370,7 +408,18 @@ def upsert_agent_run(
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_key, lineage_key) DO UPDATE SET
+            parent_agent_run_key = COALESCE(
+                excluded.parent_agent_run_key,
+                agent_runs.parent_agent_run_key
+            ),
+            raw_parent_agent_run_id = COALESCE(
+                excluded.raw_parent_agent_run_id,
+                agent_runs.raw_parent_agent_run_id
+            ),
+            agent_name = COALESCE(agent_runs.agent_name, excluded.agent_name),
+            agent_role = COALESCE(agent_runs.agent_role, excluded.agent_role),
             model_id = COALESCE(agent_runs.model_id, excluded.model_id),
+            started_at_utc = COALESCE(agent_runs.started_at_utc, excluded.started_at_utc),
             ended_at_utc = CASE
                 WHEN agent_runs.ended_at_utc IS NULL THEN excluded.ended_at_utc
                 WHEN excluded.ended_at_utc IS NULL THEN agent_runs.ended_at_utc
@@ -411,7 +460,6 @@ def insert_usage_events(
     batch_id: str,
     raw_file_id: str,
     session_key: str | None,
-    agent_run_key: str | None,
     provider: str,
     host: str,
     source_kind: str,
@@ -466,7 +514,7 @@ def insert_usage_events(
                 batch_id,
                 raw_file_id,
                 session_key,
-                agent_run_key,
+                event.agent_run_key,
                 provider,
                 host,
                 source_kind,
@@ -498,3 +546,30 @@ def insert_usage_events(
         if cursor.rowcount == 1:
             inserted += 1
     return inserted
+
+
+def repair_agent_run_lineage(connection: sqlite3.Connection) -> int:
+    cursor = connection.execute(
+        """
+        UPDATE agent_runs
+        SET parent_agent_run_key = (
+            SELECT parent_run.agent_run_key
+            FROM provider_sessions AS parent_session
+            JOIN agent_runs AS parent_run
+              ON parent_run.session_key = parent_session.session_key
+            WHERE parent_session.raw_session_id = agent_runs.raw_parent_agent_run_id
+            ORDER BY parent_run.created_at_utc
+            LIMIT 1
+        )
+        WHERE parent_agent_run_key IS NULL
+          AND raw_parent_agent_run_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1
+            FROM provider_sessions AS parent_session
+            JOIN agent_runs AS parent_run
+              ON parent_run.session_key = parent_session.session_key
+            WHERE parent_session.raw_session_id = agent_runs.raw_parent_agent_run_id
+          )
+        """
+    )
+    return int(cursor.rowcount or 0)

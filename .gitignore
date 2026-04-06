@@ -1,9 +1,11 @@
 .DS_Store
 .coverage
+__pycache__/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
 .venv/
+.python-version
 build/
 dist/
 htmlcov/

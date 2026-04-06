@@ -27,6 +27,7 @@ from codex_ledger.storage.repository import (
     finish_import_batch,
     insert_raw_file,
     insert_usage_events,
+    repair_agent_run_lineage,
     upsert_agent_run,
     upsert_model,
     upsert_provider_session,
@@ -280,13 +281,13 @@ def _import_candidate(
             content_hash=content_hash,
             parse_status=parsed.parse_status,
         )
+    repair_agent_run_lineage(connection)
     inserted_events = insert_usage_events(
         connection,
         events=parsed.events,
         batch_id=batch_id,
         raw_file_id=raw_file_id,
         session_key=parsed.session.session_key,
-        agent_run_key=parsed.agent_runs[0].agent_run_key if parsed.agent_runs else None,
         provider=parsed.provider,
         host=parsed.host,
         source_kind=candidate.source_kind,

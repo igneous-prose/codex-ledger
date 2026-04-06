@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from codex_ledger.domain.records import ImportCandidate
+from codex_ledger.domain.records import ImportCandidate, WorkspaceRecord
 from codex_ledger.ingest.service import run_import_batch
+from codex_ledger.normalize.privacy import render_workspace_label
 from codex_ledger.normalize.workspaces import resolve_workspace
 from codex_ledger.storage.archive import archive_raw_file
+from codex_ledger.storage.repository import fetch_workspace_alias_map, upsert_workspace_alias
 from codex_ledger.utils.hashing import sha256_file, sha256_text
 from tests.test_support import fetch_all, fixture_path, open_database
 
@@ -172,7 +175,7 @@ def test_turn_context_cwd_overrides_session_cwd(tmp_path: Path) -> None:
     assert row == (
         "workspace-alpha/project/subdir",
         "workspace-alpha/project",
-        "turn_context.cwd",
+        "raw_cwd",
     )
 
 
@@ -294,7 +297,7 @@ def test_workspace_privacy_defaults_use_redacted_labels(tmp_path: Path) -> None:
         "workspace-alpha/project/subdir",
         "subdir",
         f"workspace-{expected_hash[:8]}",
-        "turn_context.cwd",
+        "raw_cwd",
     )
     assert row[3] != row[1]
     assert row[3] != row[2]
@@ -308,6 +311,250 @@ def test_workspace_record_exposes_redacted_label_alias() -> None:
     assert workspace.redacted_label != workspace.resolved_root_path
 
 
+def test_project_root_resolution_uses_marker(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace-root"
+    nested = workspace_root / "src" / "nested"
+    nested.mkdir(parents=True)
+    (workspace_root / "pyproject.toml").write_text("[project]\nname = 'sample'\n", encoding="utf-8")
+    rollout = tmp_path / "project-root-rollout.jsonl"
+    _write_rollout(
+        rollout,
+        [
+            {
+                "timestamp": "2026-04-10T09:00:00Z",
+                "type": "session_meta",
+                "payload": {
+                    "id": "project-root-session",
+                    "timestamp": "2026-04-10T08:59:55Z",
+                    "cwd": str(workspace_root),
+                    "originator": "Desktop",
+                    "cli_version": "0.120.0",
+                    "source": "desktop",
+                },
+            },
+            {
+                "timestamp": "2026-04-10T09:00:01Z",
+                "type": "turn_context",
+                "payload": {
+                    "turn_id": "turn-project-root",
+                    "cwd": str(nested),
+                    "model": "gpt-5.4",
+                },
+            },
+        ],
+    )
+
+    archive_home = tmp_path / "archive"
+    run_import_batch(
+        archive_home=archive_home,
+        candidates=(ImportCandidate(rollout, "local_rollout_file"),),
+        provider="codex",
+        host="standalone_cli",
+        source_kind="local_rollout_file",
+        full_backfill=False,
+    )
+
+    connection = open_database(archive_home)
+    try:
+        row = connection.execute(
+            """
+            SELECT raw_cwd, resolved_root_path, resolution_strategy, display_label
+            FROM workspaces
+            """
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert row == (
+        str(nested),
+        str(workspace_root),
+        "project_root_marker",
+        "workspace-root",
+    )
+
+
+def test_git_root_fallback_uses_repository_root(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "git-workspace"
+    nested = workspace_root / "app" / "module"
+    nested.mkdir(parents=True)
+    (workspace_root / ".git").mkdir()
+    rollout = tmp_path / "git-root-rollout.jsonl"
+    _write_rollout(
+        rollout,
+        [
+            {
+                "timestamp": "2026-04-10T10:00:00Z",
+                "type": "session_meta",
+                "payload": {
+                    "id": "git-root-session",
+                    "timestamp": "2026-04-10T09:59:55Z",
+                    "cwd": str(workspace_root),
+                    "originator": "Desktop",
+                    "cli_version": "0.120.0",
+                    "source": "desktop",
+                },
+            },
+            {
+                "timestamp": "2026-04-10T10:00:01Z",
+                "type": "turn_context",
+                "payload": {
+                    "turn_id": "turn-git-root",
+                    "cwd": str(nested),
+                    "model": "gpt-5.4",
+                },
+            },
+        ],
+    )
+
+    archive_home = tmp_path / "archive"
+    run_import_batch(
+        archive_home=archive_home,
+        candidates=(ImportCandidate(rollout, "local_rollout_file"),),
+        provider="codex",
+        host="standalone_cli",
+        source_kind="local_rollout_file",
+        full_backfill=False,
+    )
+
+    connection = open_database(archive_home)
+    try:
+        row = connection.execute(
+            """
+            SELECT raw_cwd, resolved_root_path, resolution_strategy
+            FROM workspaces
+            """
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert row == (str(nested), str(workspace_root), "git_root")
+
+
+def test_alias_mode_uses_persisted_workspace_alias(tmp_path: Path) -> None:
+    archive_home = tmp_path / "archive"
+    run_import_batch(
+        archive_home=archive_home,
+        candidates=(ImportCandidate(fixture_path("sample_rollout.jsonl"), "local_rollout_file"),),
+        provider="codex",
+        host="standalone_cli",
+        source_kind="local_rollout_file",
+        full_backfill=False,
+    )
+
+    connection = open_database(archive_home)
+    try:
+        workspace = _fetch_single_workspace(connection)
+        upsert_workspace_alias(
+            connection,
+            workspace_key=workspace.workspace_key,
+            alias_label="client-workspace",
+        )
+        alias_map = fetch_workspace_alias_map(connection)
+    finally:
+        connection.close()
+
+    assert render_workspace_label(workspace, mode="alias", aliases=alias_map) == "client-workspace"
+
+
+def test_full_mode_returns_full_workspace_path() -> None:
+    workspace = resolve_workspace("workspace-alpha/project/subdir", None)
+
+    assert render_workspace_label(workspace, mode="full") == "workspace-alpha/project/subdir"
+
+
+def test_parent_child_lineage_is_populated_when_source_evidence_exists(tmp_path: Path) -> None:
+    archive_home = tmp_path / "archive"
+    candidates = (
+        ImportCandidate(fixture_path("lineage_parent_rollout.jsonl"), "local_rollout_file"),
+        ImportCandidate(fixture_path("lineage_child_rollout.jsonl"), "local_rollout_file"),
+    )
+    run_import_batch(
+        archive_home=archive_home,
+        candidates=candidates,
+        provider="codex",
+        host="standalone_cli",
+        source_kind="local_rollout_file",
+        full_backfill=False,
+    )
+
+    connection = open_database(archive_home)
+    try:
+        rows = fetch_all(
+            connection,
+            """
+            SELECT sessions.raw_session_id,
+                   agent_runs.agent_run_key,
+                   agent_runs.parent_agent_run_key,
+                   agent_runs.agent_name,
+                   agent_runs.agent_role,
+                   agent_runs.lineage_key
+            FROM agent_runs
+            JOIN provider_sessions AS sessions
+              ON sessions.session_key = agent_runs.session_key
+            ORDER BY sessions.raw_session_id
+            """,
+        )
+        child_event = connection.execute(
+            """
+            SELECT usage_events.agent_run_key
+            FROM usage_events
+            JOIN provider_sessions AS sessions
+              ON sessions.session_key = usage_events.session_key
+            WHERE sessions.raw_session_id = 'child-session'
+              AND usage_events.payload_type = 'token_count'
+            """
+        ).fetchone()
+    finally:
+        connection.close()
+
+    parent_agent_run_key = rows[1][1]
+    child_agent_run_key = rows[0][1]
+    assert rows == [
+        (
+            "child-session",
+            child_agent_run_key,
+            parent_agent_run_key,
+            "Researcher",
+            "research_worker",
+            "session",
+        ),
+        (
+            "parent-session",
+            parent_agent_run_key,
+            None,
+            "primary",
+            "root",
+            "root",
+        ),
+    ]
+    assert child_event == (child_agent_run_key,)
+
+
+def test_root_placeholder_retained_when_no_lineage_evidence_exists(tmp_path: Path) -> None:
+    archive_home = tmp_path / "archive"
+    run_import_batch(
+        archive_home=archive_home,
+        candidates=(ImportCandidate(fixture_path("sample_rollout.jsonl"), "local_rollout_file"),),
+        provider="codex",
+        host="standalone_cli",
+        source_kind="local_rollout_file",
+        full_backfill=False,
+    )
+
+    connection = open_database(archive_home)
+    try:
+        row = connection.execute(
+            """
+            SELECT lineage_key, parent_agent_run_key, agent_name, agent_role
+            FROM agent_runs
+            """
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert row == ("root", None, "primary", "root")
+
+
 def test_fixture_files_are_sanitized() -> None:
     fixture_dir = fixture_path("sample_rollout.jsonl").parent
     forbidden_fragments = ("/Users/", "\\Users\\", "markhardy")
@@ -316,3 +563,28 @@ def test_fixture_files_are_sanitized() -> None:
             continue
         content = path.read_text(encoding="utf-8")
         assert all(fragment not in content for fragment in forbidden_fragments), path.name
+
+
+def _fetch_single_workspace(connection: object) -> WorkspaceRecord:
+    row = connection.execute(
+        """
+        SELECT workspace_key, raw_cwd, resolved_root_path, resolved_root_path_hash,
+               display_label, redacted_display_label, resolution_strategy
+        FROM workspaces
+        """
+    ).fetchone()
+    assert row is not None
+    return WorkspaceRecord(
+        workspace_key=str(row[0]),
+        raw_cwd=row[1] if row[1] is None else str(row[1]),
+        resolved_root_path=str(row[2]),
+        resolved_root_path_hash=str(row[3]),
+        display_label=str(row[4]),
+        redacted_display_label=str(row[5]),
+        resolution_strategy=str(row[6]),
+    )
+
+
+def _write_rollout(path: Path, records: list[dict[str, object]]) -> None:
+    payload = "\n".join(json.dumps(record, sort_keys=True) for record in records) + "\n"
+    path.write_text(payload, encoding="utf-8")

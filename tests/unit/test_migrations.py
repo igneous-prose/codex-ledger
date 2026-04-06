@@ -11,7 +11,11 @@ def test_apply_migrations_creates_schema_tracking_table(tmp_path: Path) -> None:
 
     applied = apply_migrations(database_path)
 
-    assert applied == ["0001_initial.sql", "0002_phase1_ledger.sql"]
+    assert applied == [
+        "0001_initial.sql",
+        "0002_phase1_ledger.sql",
+        "0003_phase2_workspace_lineage.sql",
+    ]
 
     connection = sqlite3.connect(database_path)
     try:
@@ -27,6 +31,7 @@ def test_apply_migrations_creates_schema_tracking_table(tmp_path: Path) -> None:
     assert rows == [
         ("0001", "0001_initial.sql"),
         ("0002", "0002_phase1_ledger.sql"),
+        ("0003", "0003_phase2_workspace_lineage.sql"),
     ]
     assert {
         "agent_runs",
@@ -36,6 +41,7 @@ def test_apply_migrations_creates_schema_tracking_table(tmp_path: Path) -> None:
         "raw_files",
         "schema_migrations",
         "usage_events",
+        "workspace_aliases",
         "workspaces",
     }.issubset({str(row[0]) for row in tables})
 

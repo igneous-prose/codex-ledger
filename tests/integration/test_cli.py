@@ -37,6 +37,7 @@ def test_migrate_command_creates_database(tmp_path: Path) -> None:
     assert database_path.exists()
     assert "0001_initial.sql" in result.stdout
     assert "0002_phase1_ledger.sql" in result.stdout
+    assert "0003_phase2_workspace_lineage.sql" in result.stdout
 
 
 def test_import_codex_json_command_imports_fixture(tmp_path: Path) -> None:
@@ -123,6 +124,7 @@ def test_doctor_reports_persistence_source_dirs_database_and_migrations(tmp_path
     assert payload["migration_status"]["pending"] == [
         "0001_initial.sql",
         "0002_phase1_ledger.sql",
+        "0003_phase2_workspace_lineage.sql",
     ]
     assert payload["source_roots"] == [
         {

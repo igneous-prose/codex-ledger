@@ -25,6 +25,8 @@ IMPLEMENTED_SOURCE_KINDS: tuple[SourceKind, ...] = (
     "imported_json_report",
 )
 
+RedactionMode = Literal["redacted", "alias", "full"]
+
 
 @dataclass(frozen=True)
 class ImportCandidate:
@@ -35,6 +37,7 @@ class ImportCandidate:
 @dataclass(frozen=True)
 class WorkspaceRecord:
     workspace_key: str
+    raw_cwd: str | None
     resolved_root_path: str
     resolved_root_path_hash: str
     display_label: str
@@ -94,6 +97,7 @@ class UsageEventRecord:
     output_tokens: int | None
     reasoning_output_tokens: int | None
     total_tokens: int | None
+    agent_run_key: str | None
     raw_event_json: str
 
 

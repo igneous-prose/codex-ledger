@@ -186,22 +186,34 @@ def _build_parsed_rollout(
     events: list[UsageEventRecord] = []
     workspaces: dict[str, WorkspaceRecord] = {}
     models: set[str] = set()
+    spawned_children: list[dict[str, str]] = []
 
     for event_index, record in enumerate(records, start=1):
         record_type = _clean_str(record.get("type")) or "unknown"
         payload_raw = record.get("payload")
         payload = payload_raw if isinstance(payload_raw, dict) else {}
         payload_type = _clean_str(payload.get("type"))
+
         if record_type == "session_meta":
             session_payload = payload
             host = (
-                _clean_str(payload.get("source")) or _clean_str(payload.get("originator")) or host
+                _clean_str(payload.get("source"))
+                or _clean_str(payload.get("originator"))
+                or host
             )
         elif record_type == "turn_context":
             current_turn_index = (current_turn_index or 0) + 1
             current_turn_id = _clean_str(payload.get("turn_id"))
-            current_turn_cwd = _clean_str(payload.get("cwd"))
-            current_model_id = _clean_str(payload.get("model"))
+            current_turn_cwd = _clean_str(payload.get("cwd")) or _nested_turn_context_cwd(
+                payload
+            )
+            current_model_id = _clean_str(payload.get("model")) or _clean_str(
+                payload.get("model_id")
+            )
+
+        spawned_child = _extract_spawned_child(payload)
+        if spawned_child is not None:
+            spawned_children.append(spawned_child)
 
         session_cwd = _clean_str(session_payload.get("cwd"))
         raw_cwd = _extract_event_cwd(record_type, payload, current_turn_cwd)
@@ -218,28 +230,30 @@ def _build_parsed_rollout(
 
         usage = _extract_usage(payload)
         raw_timestamp = _clean_str(record.get("timestamp"))
-        event = UsageEventRecord(
-            event_id=sha256_text(f"{source_kind}:{event_index}:{canonical_json(record)}"),
-            event_index=event_index,
-            source_line=event_index,
-            event_type=record_type,
-            payload_type=payload_type,
-            event_ts_utc=normalize_timestamp(raw_timestamp),
-            raw_event_timestamp=raw_timestamp,
-            turn_id=_clean_str(payload.get("turn_id")) or current_turn_id,
-            turn_index=_coerce_int(payload.get("turn_index")) or current_turn_index,
-            raw_cwd=raw_cwd,
-            session_cwd=session_cwd,
-            workspace=workspace,
-            model_id=model_id,
-            input_tokens=usage.get("input_tokens"),
-            cached_input_tokens=usage.get("cached_input_tokens"),
-            output_tokens=usage.get("output_tokens"),
-            reasoning_output_tokens=usage.get("reasoning_output_tokens"),
-            total_tokens=usage.get("total_tokens"),
-            raw_event_json=canonical_json(record),
+        events.append(
+            UsageEventRecord(
+                event_id=sha256_text(f"{source_kind}:{event_index}:{canonical_json(record)}"),
+                event_index=event_index,
+                source_line=event_index,
+                event_type=record_type,
+                payload_type=payload_type,
+                event_ts_utc=normalize_timestamp(raw_timestamp),
+                raw_event_timestamp=raw_timestamp,
+                turn_id=_clean_str(payload.get("turn_id")) or current_turn_id,
+                turn_index=_coerce_int(payload.get("turn_index")) or current_turn_index,
+                raw_cwd=raw_cwd,
+                session_cwd=session_cwd,
+                workspace=workspace,
+                model_id=model_id,
+                input_tokens=usage.get("input_tokens"),
+                cached_input_tokens=usage.get("cached_input_tokens"),
+                output_tokens=usage.get("output_tokens"),
+                reasoning_output_tokens=usage.get("reasoning_output_tokens"),
+                total_tokens=usage.get("total_tokens"),
+                agent_run_key=None,
+                raw_event_json=canonical_json(record),
+            )
         )
-        events.append(event)
 
     session_id = (
         _clean_str(session_payload.get("id"))
@@ -258,23 +272,15 @@ def _build_parsed_rollout(
         originator=_clean_str(session_payload.get("originator")),
         cli_version=_clean_str(session_payload.get("cli_version")),
     )
-    root_agent = AgentRunRecord(
-        agent_run_key=sha256_text(f"{session.session_key}:root")[:32],
-        session_key=session.session_key,
-        lineage_key="root",
-        parent_agent_run_key=None,
-        raw_parent_agent_run_id=None,
-        agent_name="primary",
-        agent_role="root",
-        model_id=_first(sorted(models)),
-        started_at_utc=session.session_started_at_utc,
-        ended_at_utc=session.session_ended_at_utc,
-        raw_metadata_json=canonical_json(
-            {
-                "source_kind": source_kind,
-                "lineage": "placeholder_root",
-            }
-        ),
+    primary_agent = _build_primary_agent_run(
+        session=session,
+        session_payload=session_payload,
+        source_kind=source_kind,
+        models=tuple(sorted(models)),
+        spawned_children=tuple(spawned_children),
+    )
+    attributed_events = tuple(
+        _assign_event_agent_run_key(event, primary_agent.agent_run_key) for event in events
     )
     return ParsedFile(
         provider=provider,
@@ -285,10 +291,90 @@ def _build_parsed_rollout(
         parse_status="parsed",
         parse_error=None,
         session=session,
-        agent_runs=(root_agent,),
-        events=tuple(events),
+        agent_runs=(primary_agent,),
+        events=attributed_events,
         workspaces=tuple(sorted(workspaces.values(), key=lambda item: item.workspace_key)),
         model_ids=tuple(sorted(models)),
+    )
+
+
+def _build_primary_agent_run(
+    *,
+    session: ProviderSessionRecord,
+    session_payload: dict[str, Any],
+    source_kind: SourceKind,
+    models: tuple[str, ...],
+    spawned_children: tuple[dict[str, str], ...],
+) -> AgentRunRecord:
+    parent_raw_session_id = _extract_parent_session_id(session_payload)
+    source_thread_spawn = _extract_thread_spawn(session_payload)
+    agent_name = _clean_str(session_payload.get("agent_nickname")) or _clean_str(
+        source_thread_spawn.get("agent_nickname")
+    )
+    agent_role = _clean_str(session_payload.get("agent_role")) or _clean_str(
+        source_thread_spawn.get("agent_role")
+    )
+
+    if parent_raw_session_id is not None or agent_name is not None or agent_role is not None:
+        lineage_key = "session"
+        lineage_label = "derived_session"
+    else:
+        lineage_key = "root"
+        lineage_label = "placeholder_root"
+        agent_name = "primary"
+        agent_role = "root"
+
+    metadata: dict[str, Any] = {
+        "source_kind": source_kind,
+        "lineage": lineage_label,
+    }
+    if parent_raw_session_id is not None:
+        metadata["parent_raw_session_id"] = parent_raw_session_id
+    if source_thread_spawn:
+        metadata["thread_spawn"] = source_thread_spawn
+    if spawned_children:
+        metadata["spawned_children"] = list(spawned_children)
+
+    return AgentRunRecord(
+        agent_run_key=sha256_text(f"{session.session_key}:{lineage_key}")[:32],
+        session_key=session.session_key,
+        lineage_key=lineage_key,
+        parent_agent_run_key=None,
+        raw_parent_agent_run_id=parent_raw_session_id,
+        agent_name=agent_name,
+        agent_role=agent_role,
+        model_id=_first(models),
+        started_at_utc=session.session_started_at_utc,
+        ended_at_utc=session.session_ended_at_utc,
+        raw_metadata_json=canonical_json(metadata),
+    )
+
+
+def _assign_event_agent_run_key(
+    event: UsageEventRecord,
+    agent_run_key: str,
+) -> UsageEventRecord:
+    return UsageEventRecord(
+        event_id=event.event_id,
+        event_index=event.event_index,
+        source_line=event.source_line,
+        event_type=event.event_type,
+        payload_type=event.payload_type,
+        event_ts_utc=event.event_ts_utc,
+        raw_event_timestamp=event.raw_event_timestamp,
+        turn_id=event.turn_id,
+        turn_index=event.turn_index,
+        raw_cwd=event.raw_cwd,
+        session_cwd=event.session_cwd,
+        workspace=event.workspace,
+        model_id=event.model_id,
+        input_tokens=event.input_tokens,
+        cached_input_tokens=event.cached_input_tokens,
+        output_tokens=event.output_tokens,
+        reasoning_output_tokens=event.reasoning_output_tokens,
+        total_tokens=event.total_tokens,
+        agent_run_key=agent_run_key,
+        raw_event_json=event.raw_event_json,
     )
 
 
@@ -312,6 +398,56 @@ def _nested_turn_context_cwd(payload: dict[str, Any]) -> str | None:
     if isinstance(turn_context, dict):
         return _clean_str(turn_context.get("cwd"))
     return None
+
+
+def _extract_spawned_child(payload: dict[str, Any]) -> dict[str, str] | None:
+    if _clean_str(payload.get("type")) != "collab_agent_spawn_end":
+        return None
+
+    child_thread_id = _clean_str(payload.get("new_thread_id"))
+    if child_thread_id is None:
+        return None
+
+    child: dict[str, str] = {"thread_id": child_thread_id}
+    for key, out_key in (
+        ("new_agent_nickname", "agent_name"),
+        ("new_agent_role", "agent_role"),
+        ("model", "model_id"),
+        ("sender_thread_id", "parent_thread_id"),
+        ("reasoning_effort", "reasoning_effort"),
+    ):
+        value = _clean_str(payload.get(key))
+        if value is not None:
+            child[out_key] = value
+    return child
+
+
+def _extract_parent_session_id(session_payload: dict[str, Any]) -> str | None:
+    return _clean_str(session_payload.get("forked_from_id")) or _clean_str(
+        _extract_thread_spawn(session_payload).get("parent_thread_id")
+    )
+
+
+def _extract_thread_spawn(session_payload: dict[str, Any]) -> dict[str, str]:
+    source = session_payload.get("source")
+    if not isinstance(source, dict):
+        return {}
+    subagent = source.get("subagent")
+    if not isinstance(subagent, dict):
+        return {}
+    thread_spawn = subagent.get("thread_spawn")
+    if not isinstance(thread_spawn, dict):
+        return {}
+
+    cleaned: dict[str, str] = {}
+    for key in ("parent_thread_id", "agent_nickname", "agent_role"):
+        value = _clean_str(thread_spawn.get(key))
+        if value is not None:
+            cleaned[key] = value
+    depth = thread_spawn.get("depth")
+    if isinstance(depth, int):
+        cleaned["depth"] = str(depth)
+    return cleaned
 
 
 def _extract_usage(payload: dict[str, Any]) -> dict[str, int | None]:
