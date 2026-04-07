@@ -25,6 +25,20 @@ from codex_ledger.reports.agents import (
     format_agent_explain_table,
     format_agent_report_table,
 )
+from codex_ledger.reports.aggregate import (
+    build_aggregate_report,
+    format_aggregate_report_table,
+)
+from codex_ledger.reports.explain import (
+    explain_day,
+    explain_model,
+    explain_workspace,
+    format_explain_table,
+)
+from codex_ledger.reports.workspaces import (
+    build_workspace_report,
+    format_workspace_report_table,
+)
 from codex_ledger.storage.migrations import apply_migrations, default_database_path
 
 
@@ -125,6 +139,78 @@ def build_parser() -> argparse.ArgumentParser:
         help="Read diagnostic summaries from the canonical ledger.",
     )
     report_subparsers = report_parser.add_subparsers(dest="report_command")
+    report_aggregate_parser = report_subparsers.add_parser(
+        "aggregate",
+        help="Show aggregate usage totals for the selected period.",
+    )
+    report_aggregate_parser.add_argument(
+        "--period",
+        choices=("day", "week", "month", "year"),
+        required=True,
+        help="UTC reporting window kind.",
+    )
+    report_aggregate_parser.add_argument(
+        "--as-of",
+        required=True,
+        type=_parse_date,
+        help="UTC report anchor date in YYYY-MM-DD format.",
+    )
+    report_aggregate_parser.add_argument(
+        "--rule-set",
+        help="Pricing rule set identifier. Defaults to the latest stable local rule set.",
+    )
+    report_aggregate_parser.add_argument(
+        "--format",
+        choices=("json", "table"),
+        default="table",
+        help="Output format.",
+    )
+    report_aggregate_parser.add_argument(
+        "--archive-home",
+        type=Path,
+        help="Override the archive home directory for this run.",
+    )
+    report_aggregate_parser.set_defaults(handler=run_report_aggregate)
+
+    report_workspace_parser = report_subparsers.add_parser(
+        "workspace",
+        help="Show per-workspace usage totals for the selected period.",
+    )
+    report_workspace_parser.add_argument(
+        "--period",
+        choices=("day", "week", "month", "year"),
+        required=True,
+        help="UTC reporting window kind.",
+    )
+    report_workspace_parser.add_argument(
+        "--as-of",
+        required=True,
+        type=_parse_date,
+        help="UTC report anchor date in YYYY-MM-DD format.",
+    )
+    report_workspace_parser.add_argument(
+        "--rule-set",
+        help="Pricing rule set identifier. Defaults to the latest stable local rule set.",
+    )
+    report_workspace_parser.add_argument(
+        "--format",
+        choices=("json", "table"),
+        default="table",
+        help="Output format.",
+    )
+    report_workspace_parser.add_argument(
+        "--redaction-mode",
+        choices=("redacted", "alias", "full"),
+        default="redacted",
+        help="Workspace label representation.",
+    )
+    report_workspace_parser.add_argument(
+        "--archive-home",
+        type=Path,
+        help="Override the archive home directory for this run.",
+    )
+    report_workspace_parser.set_defaults(handler=run_report_workspace)
+
     report_agents_parser = report_subparsers.add_parser(
         "agents",
         help="Show agent and subagent token and lineage diagnostics.",
@@ -140,6 +226,10 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         type=_parse_date,
         help="UTC report anchor date in YYYY-MM-DD format.",
+    )
+    report_agents_parser.add_argument(
+        "--rule-set",
+        help="Pricing rule set identifier. Defaults to the latest stable local rule set.",
     )
     report_agents_parser.add_argument(
         "--format",
@@ -165,6 +255,115 @@ def build_parser() -> argparse.ArgumentParser:
         help="Explain canonical lineage and provenance records.",
     )
     explain_subparsers = explain_parser.add_subparsers(dest="explain_command")
+    explain_day_parser = explain_subparsers.add_parser(
+        "day",
+        help="Trace one UTC day back to sessions, raw artifacts, and priced events.",
+    )
+    explain_day_parser.add_argument(
+        "--date",
+        required=True,
+        type=_parse_date,
+        help="UTC date in YYYY-MM-DD format.",
+    )
+    explain_day_parser.add_argument(
+        "--rule-set",
+        help="Pricing rule set identifier. Defaults to the latest stable local rule set.",
+    )
+    explain_day_parser.add_argument(
+        "--format",
+        choices=("json", "table"),
+        default="table",
+        help="Output format.",
+    )
+    explain_day_parser.add_argument(
+        "--archive-home",
+        type=Path,
+        help="Override the archive home directory for this run.",
+    )
+    explain_day_parser.set_defaults(handler=run_explain_day)
+
+    explain_workspace_parser = explain_subparsers.add_parser(
+        "workspace",
+        help="Trace one workspace back to sessions, raw artifacts, and priced events.",
+    )
+    explain_workspace_parser.add_argument(
+        "--workspace",
+        required=True,
+        help="Workspace key to explain.",
+    )
+    explain_workspace_parser.add_argument(
+        "--period",
+        choices=("day", "week", "month", "year"),
+        required=True,
+        help="UTC reporting window kind.",
+    )
+    explain_workspace_parser.add_argument(
+        "--as-of",
+        required=True,
+        type=_parse_date,
+        help="UTC report anchor date in YYYY-MM-DD format.",
+    )
+    explain_workspace_parser.add_argument(
+        "--rule-set",
+        help="Pricing rule set identifier. Defaults to the latest stable local rule set.",
+    )
+    explain_workspace_parser.add_argument(
+        "--format",
+        choices=("json", "table"),
+        default="table",
+        help="Output format.",
+    )
+    explain_workspace_parser.add_argument(
+        "--redaction-mode",
+        choices=("redacted", "alias", "full"),
+        default="redacted",
+        help="Workspace label representation.",
+    )
+    explain_workspace_parser.add_argument(
+        "--archive-home",
+        type=Path,
+        help="Override the archive home directory for this run.",
+    )
+    explain_workspace_parser.set_defaults(handler=run_explain_workspace)
+
+    explain_model_parser = explain_subparsers.add_parser(
+        "model",
+        help="Trace one model back to sessions, raw artifacts, and priced events.",
+    )
+    explain_model_parser.add_argument(
+        "--model",
+        required=True,
+        help="Observed model id to explain.",
+    )
+    explain_model_parser.add_argument(
+        "--period",
+        choices=("day", "week", "month", "year"),
+        required=True,
+        help="UTC reporting window kind.",
+    )
+    explain_model_parser.add_argument(
+        "--as-of",
+        required=True,
+        type=_parse_date,
+        help="UTC report anchor date in YYYY-MM-DD format.",
+    )
+    explain_model_parser.add_argument(
+        "--rule-set",
+        help="Pricing rule set identifier. Defaults to the latest stable local rule set.",
+    )
+    explain_model_parser.add_argument(
+        "--format",
+        choices=("json", "table"),
+        default="table",
+        help="Output format.",
+    )
+    explain_model_parser.add_argument(
+        "--archive-home",
+        type=Path,
+        help="Override the archive home directory for this run.",
+    )
+    explain_model_parser.set_defaults(handler=run_explain_model)
+
     explain_agent_parser = explain_subparsers.add_parser(
         "agent",
         help="Trace one agent run back to its canonical provenance.",
@@ -173,6 +372,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--agent-run",
         required=True,
         help="Agent run key to explain.",
+    )
+    explain_agent_parser.add_argument(
+        "--rule-set",
+        help="Pricing rule set identifier. Defaults to the latest stable local rule set.",
     )
     explain_agent_parser.add_argument(
         "--format",
@@ -310,12 +513,44 @@ def run_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_report_aggregate(args: argparse.Namespace) -> int:
+    archive_home = _resolve_archive_home_argument(args.archive_home)
+    payload = build_aggregate_report(
+        archive_home=archive_home,
+        period=args.period,
+        as_of=args.as_of,
+        rule_set_id=args.rule_set,
+    )
+    if args.format == "json":
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(format_aggregate_report_table(payload))
+    return 0
+
+
+def run_report_workspace(args: argparse.Namespace) -> int:
+    archive_home = _resolve_archive_home_argument(args.archive_home)
+    payload = build_workspace_report(
+        archive_home=archive_home,
+        period=args.period,
+        as_of=args.as_of,
+        rule_set_id=args.rule_set,
+        redaction_mode=args.redaction_mode,
+    )
+    if args.format == "json":
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(format_workspace_report_table(payload))
+    return 0
+
+
 def run_report_agents(args: argparse.Namespace) -> int:
     archive_home = _resolve_archive_home_argument(args.archive_home)
     payload = build_agent_report(
         archive_home=archive_home,
         period=args.period,
         as_of=args.as_of,
+        rule_set_id=args.rule_set,
         redaction_mode=args.redaction_mode,
     )
     if args.format == "json":
@@ -325,11 +560,59 @@ def run_report_agents(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_explain_day(args: argparse.Namespace) -> int:
+    archive_home = _resolve_archive_home_argument(args.archive_home)
+    payload = explain_day(
+        archive_home=archive_home,
+        day=args.date,
+        rule_set_id=args.rule_set,
+    )
+    if args.format == "json":
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(format_explain_table(payload))
+    return 0
+
+
+def run_explain_workspace(args: argparse.Namespace) -> int:
+    archive_home = _resolve_archive_home_argument(args.archive_home)
+    payload = explain_workspace(
+        archive_home=archive_home,
+        workspace_key=args.workspace,
+        period=args.period,
+        as_of=args.as_of,
+        rule_set_id=args.rule_set,
+        redaction_mode=args.redaction_mode,
+    )
+    if args.format == "json":
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(format_explain_table(payload))
+    return 0
+
+
+def run_explain_model(args: argparse.Namespace) -> int:
+    archive_home = _resolve_archive_home_argument(args.archive_home)
+    payload = explain_model(
+        archive_home=archive_home,
+        model_id=args.model,
+        period=args.period,
+        as_of=args.as_of,
+        rule_set_id=args.rule_set,
+    )
+    if args.format == "json":
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(format_explain_table(payload))
+    return 0
+
+
 def run_explain_agent(args: argparse.Namespace) -> int:
     archive_home = _resolve_archive_home_argument(args.archive_home)
     payload = explain_agent_run(
         archive_home=archive_home,
         agent_run_key=args.agent_run,
+        rule_set_id=args.rule_set,
         redaction_mode=args.redaction_mode,
     )
     if args.format == "json":

@@ -71,3 +71,24 @@ Phase 3 adds:
 
 Only `usage_events` receive pricing rows. Zero-event spawn placeholders and root
 placeholders never receive independent cost rows.
+
+Phase 4 does not add new canonical tables. Instead it derives report payloads from joins
+across the existing canonical tables and `cost_estimates`.
+
+The stable report and explain outputs now carry:
+
+- `schema_version`
+- deterministic `generated_at_utc`
+- `generator_version`
+- `filters`
+- `timezone`
+- a `pricing` block describing rule-set selection and coverage
+
+When pricing is included, reports distinguish:
+
+- total tokens
+- priced token totals
+- unpriced token totals
+- reference USD estimate over priced events only
+
+When pricing is omitted, the report metadata says so explicitly.

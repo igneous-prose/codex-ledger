@@ -2,14 +2,23 @@ from __future__ import annotations
 
 import sqlite3
 from collections import defaultdict
-from datetime import UTC, date, datetime, timedelta
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 from codex_ledger.domain.records import RedactionMode
-from codex_ledger.normalize.privacy import DEFAULT_REDACTION_MODE, render_workspace_label
+from codex_ledger.normalize.privacy import DEFAULT_REDACTION_MODE
+from codex_ledger.reports.common import (
+    base_payload,
+    build_pricing_block,
+    fetch_alias_map,
+    fetch_report_rows,
+    period_bounds,
+    render_workspace_label_for_row,
+    resolve_pricing_context,
+    summarize_token_totals,
+)
 from codex_ledger.storage.migrations import connect_database, default_database_path
-from codex_ledger.storage.repository import fetch_workspace_alias_map
 
 DIAGNOSTIC_SCHEMA_VERSION = "phase2.1-agent-diagnostics-v1"
 
@@ -19,37 +28,216 @@ def build_agent_report(
     archive_home: Path,
     period: str,
     as_of: date,
+    rule_set_id: str | None = None,
     redaction_mode: RedactionMode = DEFAULT_REDACTION_MODE,
 ) -> dict[str, Any]:
+    start_utc, end_utc = period_bounds(period, as_of)
+    pricing_context = resolve_pricing_context(rule_set_id)
     database_path = default_database_path(archive_home)
     with connect_database(database_path) as connection:
-        return _build_agent_report_payload(
-            connection=connection,
-            period=period,
-            as_of=as_of,
-            redaction_mode=redaction_mode,
+        alias_map = fetch_alias_map(connection)
+        token_rows = fetch_report_rows(
+            connection,
+            pricing_context=pricing_context,
+            start_utc=start_utc,
+            end_utc=end_utc,
         )
+        activity_rows = _merge_pricing_fields(
+            _fetch_agent_activity_rows(connection, start_utc=start_utc, end_utc=end_utc),
+            token_rows,
+        )
+        lineage_rows = _fetch_agent_runs(connection, start_utc, end_utc)
+    pricing = build_pricing_block(token_rows, pricing_context)
+    payload = base_payload(
+        schema_version=DIAGNOSTIC_SCHEMA_VERSION,
+        rows=token_rows,
+        filters={
+            "period": period,
+            "as_of": as_of.isoformat(),
+            "start_utc": start_utc,
+            "end_exclusive_utc": end_utc,
+            "redaction_mode": redaction_mode,
+        },
+        pricing=pricing,
+        fallback_generated_at_utc=end_utc,
+    )
+    payload.update(
+        _agent_report_data(activity_rows, lineage_rows, pricing, redaction_mode, alias_map)
+    )
+    return payload
 
 
 def explain_agent_run(
     *,
     archive_home: Path,
     agent_run_key: str,
+    rule_set_id: str | None = None,
     redaction_mode: RedactionMode = DEFAULT_REDACTION_MODE,
 ) -> dict[str, Any]:
+    pricing_context = resolve_pricing_context(rule_set_id)
     database_path = default_database_path(archive_home)
     with connect_database(database_path) as connection:
-        return _build_agent_explain_payload(
-            connection=connection,
-            agent_run_key=agent_run_key,
-            redaction_mode=redaction_mode,
+        alias_map = fetch_alias_map(connection)
+        row = connection.execute(
+            """
+            SELECT ar.agent_run_key,
+                   ar.session_key,
+                   ar.lineage_key,
+                   ar.parent_agent_run_key,
+                   ar.raw_parent_agent_run_id,
+                   ar.agent_kind,
+                   ar.agent_name,
+                   ar.agent_role,
+                   ar.requested_model_id,
+                   ar.model_id,
+                   ar.lineage_status,
+                   ar.lineage_confidence,
+                   ar.unresolved_reason,
+                   ar.started_at_utc,
+                   ar.ended_at_utc,
+                   ar.raw_metadata_json,
+                   ar.source_kind,
+                   ps.raw_session_id,
+                   rf.raw_file_id,
+                   rf.stored_relpath
+            FROM agent_runs AS ar
+            JOIN provider_sessions AS ps
+              ON ps.session_key = ar.session_key
+            JOIN raw_files AS rf
+              ON rf.raw_file_id = ar.raw_file_id
+            WHERE ar.agent_run_key = ?
+            """,
+            (agent_run_key,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Unknown agent run: {agent_run_key}")
+        token_rows = fetch_report_rows(
+            connection,
+            pricing_context=pricing_context,
+            extra_where=("ue.agent_run_key = ?",),
+            extra_params=(agent_run_key,),
         )
+        activity_rows = _merge_pricing_fields(
+            _fetch_agent_activity_rows(connection, agent_run_key=agent_run_key),
+            token_rows,
+        )
+
+    pricing = build_pricing_block(token_rows, pricing_context)
+    payload = base_payload(
+        schema_version=DIAGNOSTIC_SCHEMA_VERSION,
+        rows=token_rows,
+        filters={
+            "kind": "agent",
+            "agent_run_key": agent_run_key,
+            "redaction_mode": redaction_mode,
+        },
+        pricing=pricing,
+        fallback_generated_at_utc=str(row[13] or row[14] or "1970-01-01T00:00:00Z"),
+    )
+
+    workspace_items: dict[str, dict[str, str]] = {}
+    observed_model_ids: set[str] = set()
+    estimate_status_counts: dict[str, int] = defaultdict(int)
+    total_tokens = 0
+    priced_tokens = 0
+    unpriced_tokens = 0
+    priced_amount = 0.0
+    events = []
+    for event in activity_rows:
+        workspace_label = render_workspace_label_for_row(
+            event,
+            redaction_mode=redaction_mode,
+            alias_map=alias_map,
+        )
+        workspace_items[str(event["workspace_key"])] = {
+            "workspace_key": str(event["workspace_key"]),
+            "workspace_label": workspace_label,
+            "resolution_strategy": str(event["resolution_strategy"]),
+        }
+        if event["observed_model_id"] is not None:
+            observed_model_ids.add(str(event["observed_model_id"]))
+        status = str(event["estimate_status"] or "missing_estimate_row")
+        estimate_status_counts[status] += 1
+        total_tokens += int(event["total_tokens"])
+        if status == "priced":
+            priced_tokens += int(event["total_tokens"])
+            priced_amount += float(event["amount"] or 0.0)
+        else:
+            unpriced_tokens += int(event["total_tokens"])
+        event_item = {
+            "event_id": str(event["event_id"]),
+            "event_ts_utc": event["event_ts_utc"],
+            "event_index": int(event["event_index"]),
+            "model_id": event["observed_model_id"],
+            "workspace_label": workspace_label,
+            "stored_relpath": str(event["stored_relpath"]),
+            "total_tokens": int(event["total_tokens"]),
+        }
+        if pricing["included"]:
+            event_item["estimate_status"] = status
+            event_item["reference_usd_estimate"] = (
+                None if event["amount"] is None else float(event["amount"])
+            )
+        events.append(event_item)
+
+    payload.update(
+        {
+            "agent_run": {
+                "agent_run_key": str(row[0]),
+                "session_key": str(row[1]),
+                "lineage_key": str(row[2]),
+                "parent_agent_run_key": None if row[3] is None else str(row[3]),
+                "raw_parent_agent_run_id": None if row[4] is None else str(row[4]),
+                "agent_kind": str(row[5]),
+                "agent_name": None if row[6] is None else str(row[6]),
+                "agent_role": None if row[7] is None else str(row[7]),
+                "requested_model_id": None if row[8] is None else str(row[8]),
+                "observed_model_id": None if row[9] is None else str(row[9]),
+                "lineage_status": str(row[10]),
+                "lineage_confidence": str(row[11]),
+                "unresolved_reason": None if row[12] is None else str(row[12]),
+                "started_at_utc": None if row[13] is None else str(row[13]),
+                "ended_at_utc": None if row[14] is None else str(row[14]),
+                "raw_metadata_json": str(row[15]),
+            },
+            "session": {
+                "raw_session_id": str(row[17]),
+            },
+            "provenance": {
+                "source_kind": str(row[16]),
+                "raw_file_id": str(row[18]),
+                "stored_relpath": str(row[19]),
+            },
+            "event_summary": {
+                "event_count": len(activity_rows),
+                "total_tokens": total_tokens,
+                "observed_model_ids": sorted(observed_model_ids),
+                **(
+                    {
+                        "priced_token_total": priced_tokens,
+                        "unpriced_token_total": unpriced_tokens,
+                        "reference_usd_estimate": priced_amount,
+                        "estimate_status_mix": [
+                            {"label": label, "count": estimate_status_counts[label]}
+                            for label in sorted(estimate_status_counts)
+                        ],
+                    }
+                    if pricing["included"]
+                    else {}
+                ),
+            },
+            "workspace_attribution": [workspace_items[key] for key in sorted(workspace_items)],
+            "events": events,
+        }
+    )
+    return payload
 
 
 def format_agent_report_table(payload: dict[str, Any]) -> str:
     summary = payload["summary"]
+    pricing = payload["pricing"]
     lines = [
-        f"Agent diagnostics: {payload['period']['period']} as of {payload['period']['as_of']}",
+        f"Agent diagnostics: {payload['filters']['period']} as of {payload['filters']['as_of']}",
         (
             "Root usage: "
             f"{summary['root_usage']['event_count']} events, "
@@ -66,12 +254,24 @@ def format_agent_report_table(payload: dict[str, Any]) -> str:
             f"unresolved_spawns={summary['unresolved_spawn_count']}, "
             f"orphan_children={summary['orphan_child_count']}"
         ),
-        "Top heavy hitters:",
     ]
+    if pricing["included"]:
+        lines.append(
+            "Pricing: "
+            f"{pricing['selected_rule_set_id']} "
+            f"({pricing['coverage_status']}, "
+            f"{pricing['reference_usd_estimate']} {pricing['currency']})"
+        )
+    else:
+        lines.append(f"Pricing: omitted ({pricing['warnings'][0]})")
+    lines.append("Top heavy hitters:")
     for item in payload["top_heavy_hitters"][:5]:
         label = item["agent_name"] or item["agent_role"] or item["agent_run_key"]
+        suffix = ""
+        if pricing["included"]:
+            suffix = f", usd={item['reference_usd_estimate']}"
         lines.append(
-            f"- {label}: {item['total_tokens']} tokens across {item['event_count']} events"
+            f"- {label}: {item['total_tokens']} tokens across {item['event_count']} events{suffix}"
         )
     return "\n".join(lines)
 
@@ -79,6 +279,7 @@ def format_agent_report_table(payload: dict[str, Any]) -> str:
 def format_agent_explain_table(payload: dict[str, Any]) -> str:
     run = payload["agent_run"]
     summary = payload["event_summary"]
+    pricing = payload["pricing"]
     lines = [
         f"Agent run: {run['agent_run_key']}",
         f"Kind: {run['agent_kind']}",
@@ -91,267 +292,90 @@ def format_agent_explain_table(payload: dict[str, Any]) -> str:
         f"Tokens: {summary['total_tokens']}",
         f"Stored raw artifact: {payload['provenance']['stored_relpath']}",
     ]
+    if pricing["included"]:
+        lines.append(
+            "Pricing: "
+            f"{pricing['selected_rule_set_id']} "
+            f"({summary['reference_usd_estimate']} {pricing['currency']})"
+        )
     return "\n".join(lines)
 
 
-def _build_agent_report_payload(
-    *,
-    connection: sqlite3.Connection,
-    period: str,
-    as_of: date,
+def _agent_report_data(
+    rows: list[dict[str, Any]],
+    lineage_rows: list[dict[str, str | None]],
+    pricing: dict[str, Any],
     redaction_mode: RedactionMode,
+    alias_map: dict[str, str],
 ) -> dict[str, Any]:
-    start_utc, end_utc = _period_bounds(period, as_of)
-    alias_map = fetch_workspace_alias_map(connection)
-    agent_runs = _fetch_agent_runs(connection, start_utc, end_utc)
-    event_rows = _fetch_agent_event_rows(
-        connection,
-        start_utc,
-        end_utc,
-        redaction_mode=redaction_mode,
-        alias_map=alias_map,
-    )
+    root_rows = [row for row in rows if row["agent_kind"] == "root"]
+    subagent_rows = [row for row in rows if row["agent_kind"] != "root"]
+    root_usage = summarize_token_totals(root_rows)
+    subagent_usage = summarize_token_totals(subagent_rows)
 
-    root_usage = _usage_bucket()
-    subagent_usage = _usage_bucket()
-    usage_by_name: dict[str, dict[str, Any]] = {}
-    usage_by_role: dict[str, dict[str, Any]] = {}
-    usage_by_requested_model: dict[str, dict[str, Any]] = {}
-    usage_by_observed_model: dict[str, dict[str, Any]] = {}
-    heavy_hitters: dict[str, dict[str, Any]] = {}
+    usage_by_name = _group_rows(rows, "agent_name")
+    usage_by_role = _group_rows(rows, "agent_role")
+    usage_by_requested_model = _group_rows(rows, "requested_model_id")
+    usage_by_observed_model = _group_rows(rows, "observed_model_id")
+    heavy_hitters = _heavy_hitters(rows, redaction_mode, alias_map)
+
     workspace_spread: dict[str, set[str]] = defaultdict(set)
     workspace_labels_by_key: dict[str, str] = {}
-
-    for row in event_rows:
-        bucket = root_usage if row["agent_kind"] == "root" else subagent_usage
-        _add_usage(bucket, row)
-
-        agent_name = row["agent_name"] or "unknown"
-        agent_role = row["agent_role"] or "unknown"
-        requested_model = row["requested_model_id"] or "unknown"
-        observed_model = row["observed_model_id"] or "unknown"
-
-        _add_group_usage(usage_by_name, agent_name, row)
-        _add_group_usage(usage_by_role, agent_role, row)
-        _add_group_usage(usage_by_requested_model, requested_model, row)
-        _add_group_usage(usage_by_observed_model, observed_model, row)
-
-        hitter = heavy_hitters.setdefault(
-            row["agent_run_key"],
-            {
-                "agent_run_key": row["agent_run_key"],
-                "agent_name": row["agent_name"],
-                "agent_role": row["agent_role"],
-                "agent_kind": row["agent_kind"],
-                "lineage_status": row["lineage_status"],
-                "requested_model_id": row["requested_model_id"],
-                "observed_model_id": row["observed_model_id"],
-                "event_count": 0,
-                "total_tokens": 0,
-                "workspace_labels": set(),
-            },
-        )
-        hitter["event_count"] += 1
-        hitter["total_tokens"] += row["total_tokens"]
-        hitter["workspace_labels"].add(row["workspace_label"])
-
-        workspace_spread[agent_name].add(row["workspace_key"])
-        workspace_labels_by_key[row["workspace_key"]] = row["workspace_label"]
-
-    status_mix = _count_mix(agent_runs, "lineage_status")
-    confidence_mix = _count_mix(agent_runs, "lineage_confidence")
-
-    workspace_spread_items = []
-    for agent_name, workspace_keys in sorted(workspace_spread.items()):
-        labels = sorted(workspace_labels_by_key[key] for key in workspace_keys)
-        workspace_spread_items.append(
-            {
-                "agent_name": agent_name,
-                "workspace_count": len(workspace_keys),
-                "workspace_labels": labels,
-            }
+    for row in rows:
+        agent_name = str(row["agent_name"] or "unknown")
+        workspace_spread[agent_name].add(str(row["workspace_key"]))
+        workspace_labels_by_key[str(row["workspace_key"])] = render_workspace_label_for_row(
+            row,
+            redaction_mode=redaction_mode,
+            alias_map=alias_map,
         )
 
-    heavy_hitter_items = []
-    for item in heavy_hitters.values():
-        heavy_hitter_items.append(
-            {
-                **item,
-                "workspace_count": len(item["workspace_labels"]),
-                "workspace_labels": sorted(item["workspace_labels"]),
-            }
-        )
-
-    payload = {
-        "schema_version": DIAGNOSTIC_SCHEMA_VERSION,
-        "period": {
-            "period": period,
-            "as_of": as_of.isoformat(),
-            "start_utc": start_utc,
-            "end_exclusive_utc": end_utc,
-        },
+    return {
         "summary": {
             "root_usage": root_usage,
             "subagent_usage": subagent_usage,
             "matched_child_count": sum(
                 1
-                for row in agent_runs
+                for row in lineage_rows
                 if row["agent_kind"] == "subagent"
                 and row["lineage_key"] == "session"
                 and row["lineage_status"] == "resolved"
             ),
             "unresolved_spawn_count": sum(
-                1 for row in agent_runs if row["lineage_status"] == "spawn_only_unmatched"
+                1 for row in lineage_rows if row["lineage_status"] == "spawn_only_unmatched"
             ),
             "orphan_child_count": sum(
-                1 for row in agent_runs if row["lineage_status"] == "child_only_orphaned"
+                1 for row in lineage_rows if row["lineage_status"] == "child_only_orphaned"
             ),
-            "lineage_status_mix": status_mix,
-            "lineage_confidence_mix": confidence_mix,
+            "lineage_status_mix": _count_mix(lineage_rows, "lineage_status"),
+            "lineage_confidence_mix": _count_mix(lineage_rows, "lineage_confidence"),
         },
-        "usage_by_agent_name": _sorted_usage_groups(usage_by_name),
-        "usage_by_agent_role": _sorted_usage_groups(usage_by_role),
-        "usage_by_requested_model": _sorted_usage_groups(usage_by_requested_model),
-        "usage_by_observed_model": _sorted_usage_groups(usage_by_observed_model),
-        "top_heavy_hitters": sorted(
-            heavy_hitter_items,
-            key=lambda item: (-int(item["total_tokens"]), str(item["agent_run_key"])),
+        "usage_by_agent_name": usage_by_name,
+        "usage_by_agent_role": usage_by_role,
+        "usage_by_requested_model": usage_by_requested_model,
+        "usage_by_observed_model": usage_by_observed_model,
+        "top_heavy_hitters": heavy_hitters,
+        "top_priced_heavy_hitters": (
+            sorted(
+                heavy_hitters,
+                key=lambda item: (
+                    -float(item["reference_usd_estimate"]),
+                    -int(item["total_tokens"]),
+                    str(item["agent_run_key"]),
+                ),
+            )
+            if pricing["included"]
+            else []
         ),
-        "workspace_spread_by_agent": workspace_spread_items,
+        "workspace_spread_by_agent": [
+            {
+                "agent_name": agent_name,
+                "workspace_count": len(workspace_keys),
+                "workspace_labels": sorted(workspace_labels_by_key[key] for key in workspace_keys),
+            }
+            for agent_name, workspace_keys in sorted(workspace_spread.items())
+        ],
     }
-    return payload
-
-
-def _build_agent_explain_payload(
-    *,
-    connection: sqlite3.Connection,
-    agent_run_key: str,
-    redaction_mode: RedactionMode,
-) -> dict[str, Any]:
-    alias_map = fetch_workspace_alias_map(connection)
-    row = connection.execute(
-        """
-        SELECT ar.agent_run_key,
-               ar.session_key,
-               ar.lineage_key,
-               ar.parent_agent_run_key,
-               ar.raw_parent_agent_run_id,
-               ar.agent_kind,
-               ar.agent_name,
-               ar.agent_role,
-               ar.requested_model_id,
-               ar.model_id,
-               ar.lineage_status,
-               ar.lineage_confidence,
-               ar.unresolved_reason,
-               ar.started_at_utc,
-               ar.ended_at_utc,
-               ar.raw_metadata_json,
-               ar.source_kind,
-               ps.raw_session_id,
-               rf.raw_file_id,
-               rf.stored_relpath
-        FROM agent_runs AS ar
-        JOIN provider_sessions AS ps
-          ON ps.session_key = ar.session_key
-        JOIN raw_files AS rf
-          ON rf.raw_file_id = ar.raw_file_id
-        WHERE ar.agent_run_key = ?
-        """,
-        (agent_run_key,),
-    ).fetchone()
-    if row is None:
-        raise ValueError(f"Unknown agent run: {agent_run_key}")
-
-    event_rows = connection.execute(
-        """
-        SELECT ue.event_id,
-               ue.event_index,
-               ue.event_type,
-               ue.payload_type,
-               ue.event_ts_utc,
-               ue.model_id,
-               ue.total_tokens,
-               ue.input_tokens,
-               ue.cached_input_tokens,
-               ue.output_tokens,
-               ue.reasoning_output_tokens,
-               ue.workspace_key,
-               w.display_label,
-               w.redacted_display_label,
-               w.resolved_root_path,
-               w.resolution_strategy
-        FROM usage_events AS ue
-        JOIN workspaces AS w
-          ON w.workspace_key = ue.workspace_key
-        WHERE ue.agent_run_key = ?
-        ORDER BY ue.event_index
-        """,
-        (agent_run_key,),
-    ).fetchall()
-
-    workspace_items: dict[str, dict[str, str]] = {}
-    observed_model_ids: set[str] = set()
-    total_tokens = 0
-    for event in event_rows:
-        workspace = {
-            "workspace_key": str(event[11]),
-            "display_label": str(event[12]),
-            "redacted_display_label": str(event[13]),
-            "resolved_root_path": str(event[14]),
-            "resolution_strategy": str(event[15]),
-        }
-        workspace_label = render_workspace_label(
-            _workspace_proxy(workspace),
-            mode=redaction_mode,
-            aliases=alias_map,
-        )
-        workspace_items[workspace["workspace_key"]] = {
-            "workspace_key": workspace["workspace_key"],
-            "workspace_label": workspace_label,
-            "resolution_strategy": workspace["resolution_strategy"],
-        }
-        model_id = event[5]
-        if model_id is not None:
-            observed_model_ids.add(str(model_id))
-        total_tokens += int(event[6] or 0)
-
-    payload = {
-        "schema_version": DIAGNOSTIC_SCHEMA_VERSION,
-        "agent_run": {
-            "agent_run_key": str(row[0]),
-            "session_key": str(row[1]),
-            "lineage_key": str(row[2]),
-            "parent_agent_run_key": row[3] if row[3] is None else str(row[3]),
-            "raw_parent_agent_run_id": row[4] if row[4] is None else str(row[4]),
-            "agent_kind": str(row[5]),
-            "agent_name": row[6] if row[6] is None else str(row[6]),
-            "agent_role": row[7] if row[7] is None else str(row[7]),
-            "requested_model_id": row[8] if row[8] is None else str(row[8]),
-            "observed_model_id": row[9] if row[9] is None else str(row[9]),
-            "lineage_status": str(row[10]),
-            "lineage_confidence": str(row[11]),
-            "unresolved_reason": row[12] if row[12] is None else str(row[12]),
-            "started_at_utc": row[13] if row[13] is None else str(row[13]),
-            "ended_at_utc": row[14] if row[14] is None else str(row[14]),
-            "raw_metadata_json": str(row[15]),
-        },
-        "session": {
-            "raw_session_id": str(row[17]),
-        },
-        "provenance": {
-            "source_kind": str(row[16]),
-            "raw_file_id": str(row[18]),
-            "stored_relpath": str(row[19]),
-        },
-        "event_summary": {
-            "event_count": len(event_rows),
-            "total_tokens": total_tokens,
-            "observed_model_ids": sorted(observed_model_ids),
-        },
-        "workspace_attribution": [workspace_items[key] for key in sorted(workspace_items)],
-    }
-    return payload
 
 
 def _fetch_agent_runs(
@@ -370,8 +394,7 @@ def _fetch_agent_runs(
                model_id,
                lineage_status,
                lineage_confidence,
-               unresolved_reason,
-               COALESCE(started_at_utc, ended_at_utc)
+               unresolved_reason
         FROM agent_runs
         WHERE COALESCE(started_at_utc, ended_at_utc) >= ?
           AND COALESCE(started_at_utc, ended_at_utc) < ?
@@ -391,148 +414,150 @@ def _fetch_agent_runs(
             "lineage_status": str(row[7]),
             "lineage_confidence": str(row[8]),
             "unresolved_reason": None if row[9] is None else str(row[9]),
-            "started_or_ended_at_utc": None if row[10] is None else str(row[10]),
         }
         for row in rows
     ]
 
 
-def _fetch_agent_event_rows(
+def _fetch_agent_activity_rows(
     connection: sqlite3.Connection,
-    start_utc: str,
-    end_utc: str,
     *,
-    redaction_mode: RedactionMode,
-    alias_map: dict[str, str],
+    start_utc: str | None = None,
+    end_utc: str | None = None,
+    agent_run_key: str | None = None,
 ) -> list[dict[str, Any]]:
+    where_clauses = ["ue.agent_run_key IS NOT NULL"]
+    params: list[object] = []
+    if start_utc is not None:
+        where_clauses.append("ue.event_ts_utc >= ?")
+        params.append(start_utc)
+    if end_utc is not None:
+        where_clauses.append("ue.event_ts_utc < ?")
+        params.append(end_utc)
+    if agent_run_key is not None:
+        where_clauses.append("ue.agent_run_key = ?")
+        params.append(agent_run_key)
+
     rows = connection.execute(
-        """
-        SELECT ue.agent_run_key,
+        f"""
+        SELECT ue.event_id,
+               ue.event_ts_utc,
+               ue.event_index,
+               ue.session_key,
+               ue.raw_file_id,
+               rf.stored_relpath,
                ue.workspace_key,
                w.display_label,
                w.redacted_display_label,
                w.resolved_root_path,
+               w.resolution_strategy,
+               ue.agent_run_key,
                ar.agent_kind,
                ar.agent_name,
                ar.agent_role,
                ar.requested_model_id,
                ue.model_id,
                ar.lineage_status,
-               ue.total_tokens,
+               ar.lineage_confidence,
                ue.input_tokens,
                ue.cached_input_tokens,
                ue.output_tokens,
                ue.reasoning_output_tokens,
-               w.resolution_strategy
+               ue.total_tokens
         FROM usage_events AS ue
-        JOIN agent_runs AS ar
-          ON ar.agent_run_key = ue.agent_run_key
+        JOIN raw_files AS rf
+          ON rf.raw_file_id = ue.raw_file_id
         JOIN workspaces AS w
           ON w.workspace_key = ue.workspace_key
-        WHERE ue.event_ts_utc >= ?
-          AND ue.event_ts_utc < ?
-        ORDER BY ue.event_id
+        JOIN agent_runs AS ar
+          ON ar.agent_run_key = ue.agent_run_key
+        WHERE {" AND ".join(where_clauses)}
+        ORDER BY ue.event_ts_utc, ue.event_index, ue.event_id
         """,
-        (start_utc, end_utc),
+        tuple(params),
     ).fetchall()
-    items = []
-    for row in rows:
-        workspace = _workspace_proxy(
-            {
-                "workspace_key": str(row[1]),
-                "display_label": str(row[2]),
-                "redacted_display_label": str(row[3]),
-                "resolved_root_path": str(row[4]),
-                "resolution_strategy": str(row[16]),
-            }
-        )
-        items.append(
-            {
-                "agent_run_key": str(row[0]),
-                "workspace_key": str(row[1]),
-                "workspace_label": render_workspace_label(
-                    workspace,
-                    mode=redaction_mode,
-                    aliases=alias_map,
-                ),
-                "agent_kind": str(row[5]),
-                "agent_name": None if row[6] is None else str(row[6]),
-                "agent_role": None if row[7] is None else str(row[7]),
-                "requested_model_id": None if row[8] is None else str(row[8]),
-                "observed_model_id": None if row[9] is None else str(row[9]),
-                "lineage_status": str(row[10]),
-                "total_tokens": int(row[11] or 0),
-                "input_tokens": int(row[12] or 0),
-                "cached_input_tokens": int(row[13] or 0),
-                "output_tokens": int(row[14] or 0),
-                "reasoning_output_tokens": int(row[15] or 0),
-            }
-        )
-    return items
-
-
-def _period_bounds(period: str, as_of: date) -> tuple[str, str]:
-    if period == "day":
-        start = datetime.combine(as_of, datetime.min.time(), tzinfo=UTC)
-        end = start + timedelta(days=1)
-    elif period == "week":
-        start_date = as_of - timedelta(days=as_of.weekday())
-        start = datetime.combine(start_date, datetime.min.time(), tzinfo=UTC)
-        end = start + timedelta(days=7)
-    elif period == "month":
-        start = datetime(as_of.year, as_of.month, 1, tzinfo=UTC)
-        if as_of.month == 12:
-            end = datetime(as_of.year + 1, 1, 1, tzinfo=UTC)
-        else:
-            end = datetime(as_of.year, as_of.month + 1, 1, tzinfo=UTC)
-    elif period == "year":
-        start = datetime(as_of.year, 1, 1, tzinfo=UTC)
-        end = datetime(as_of.year + 1, 1, 1, tzinfo=UTC)
-    else:
-        raise ValueError(f"Unsupported period: {period}")
-
-    return (
-        start.isoformat().replace("+00:00", "Z"),
-        end.isoformat().replace("+00:00", "Z"),
-    )
-
-
-def _usage_bucket() -> dict[str, int]:
-    return {
-        "event_count": 0,
-        "total_tokens": 0,
-        "input_tokens": 0,
-        "cached_input_tokens": 0,
-        "output_tokens": 0,
-        "reasoning_output_tokens": 0,
-    }
-
-
-def _add_usage(bucket: dict[str, int], row: dict[str, Any]) -> None:
-    bucket["event_count"] += 1
-    bucket["total_tokens"] += int(row["total_tokens"])
-    bucket["input_tokens"] += int(row["input_tokens"])
-    bucket["cached_input_tokens"] += int(row["cached_input_tokens"])
-    bucket["output_tokens"] += int(row["output_tokens"])
-    bucket["reasoning_output_tokens"] += int(row["reasoning_output_tokens"])
-
-
-def _add_group_usage(groups: dict[str, dict[str, Any]], key: str, row: dict[str, Any]) -> None:
-    bucket = groups.setdefault(
-        key,
+    return [
         {
-            "label": key,
-            "event_count": 0,
-            "total_tokens": 0,
-            "agent_run_count": set(),
-        },
-    )
-    bucket["event_count"] += 1
-    bucket["total_tokens"] += int(row["total_tokens"])
-    bucket["agent_run_count"].add(row["agent_run_key"])
+            "event_id": str(row[0]),
+            "event_ts_utc": None if row[1] is None else str(row[1]),
+            "event_index": int(row[2]),
+            "session_key": None if row[3] is None else str(row[3]),
+            "raw_file_id": str(row[4]),
+            "stored_relpath": str(row[5]),
+            "workspace_key": str(row[6]),
+            "display_label": str(row[7]),
+            "redacted_display_label": str(row[8]),
+            "resolved_root_path": str(row[9]),
+            "resolution_strategy": str(row[10]),
+            "agent_run_key": str(row[11]),
+            "agent_kind": str(row[12]),
+            "agent_name": None if row[13] is None else str(row[13]),
+            "agent_role": None if row[14] is None else str(row[14]),
+            "requested_model_id": None if row[15] is None else str(row[15]),
+            "observed_model_id": None if row[16] is None else str(row[16]),
+            "lineage_status": None if row[17] is None else str(row[17]),
+            "lineage_confidence": None if row[18] is None else str(row[18]),
+            "input_tokens": int(row[19] or 0),
+            "cached_input_tokens": int(row[20] or 0),
+            "output_tokens": int(row[21] or 0),
+            "reasoning_output_tokens": int(row[22] or 0),
+            "total_tokens": int(row[23] or 0),
+            "estimate_status": None,
+            "amount": None,
+        }
+        for row in rows
+    ]
 
 
-def _sorted_usage_groups(groups: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+def _merge_pricing_fields(
+    activity_rows: list[dict[str, Any]],
+    token_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    pricing_by_event = {
+        str(row["event_id"]): {
+            "estimate_status": row["estimate_status"],
+            "amount": row["amount"],
+        }
+        for row in token_rows
+    }
+    merged = []
+    for row in activity_rows:
+        merged_row = dict(row)
+        merged_row.update(pricing_by_event.get(str(row["event_id"]), {}))
+        merged.append(merged_row)
+    return merged
+
+
+def _group_rows(rows: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+    groups: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        label = str(row[key] or "unknown")
+        bucket = groups.setdefault(
+            label,
+            {
+                "label": label,
+                "event_count": 0,
+                "total_tokens": 0,
+                "priced_token_total": 0,
+                "unpriced_token_total": 0,
+                "reference_usd_estimate": 0.0,
+                "agent_run_keys": set(),
+                "session_keys": set(),
+                "workspace_keys": set(),
+            },
+        )
+        bucket["event_count"] += 1
+        bucket["total_tokens"] += int(row["total_tokens"])
+        if row["estimate_status"] == "priced":
+            bucket["priced_token_total"] += int(row["total_tokens"])
+            bucket["reference_usd_estimate"] += float(row["amount"] or 0.0)
+        else:
+            bucket["unpriced_token_total"] += int(row["total_tokens"])
+        if row["agent_run_key"] is not None:
+            bucket["agent_run_keys"].add(row["agent_run_key"])
+        if row["session_key"] is not None:
+            bucket["session_keys"].add(row["session_key"])
+        bucket["workspace_keys"].add(row["workspace_key"])
     items = []
     for bucket in groups.values():
         items.append(
@@ -540,10 +565,85 @@ def _sorted_usage_groups(groups: dict[str, dict[str, Any]]) -> list[dict[str, An
                 "label": str(bucket["label"]),
                 "event_count": int(bucket["event_count"]),
                 "total_tokens": int(bucket["total_tokens"]),
-                "agent_run_count": len(bucket["agent_run_count"]),
+                "priced_token_total": int(bucket["priced_token_total"]),
+                "unpriced_token_total": int(bucket["unpriced_token_total"]),
+                "reference_usd_estimate": float(bucket["reference_usd_estimate"]),
+                "agent_run_count": len(bucket["agent_run_keys"]),
+                "session_count": len(bucket["session_keys"]),
+                "workspace_count": len(bucket["workspace_keys"]),
             }
         )
-    return sorted(items, key=lambda item: (-int(item["total_tokens"]), item["label"]))
+    return sorted(items, key=lambda item: (-int(item["total_tokens"]), str(item["label"])))
+
+
+def _heavy_hitters(
+    rows: list[dict[str, Any]],
+    redaction_mode: RedactionMode,
+    alias_map: dict[str, str],
+) -> list[dict[str, Any]]:
+    heavy_hitters: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        key = str(row["agent_run_key"] or "unassigned")
+        bucket = heavy_hitters.setdefault(
+            key,
+            {
+                "agent_run_key": key,
+                "agent_name": row["agent_name"],
+                "agent_role": row["agent_role"],
+                "agent_kind": row["agent_kind"] or "unknown",
+                "lineage_status": row["lineage_status"],
+                "requested_model_id": row["requested_model_id"],
+                "observed_model_id": row["observed_model_id"],
+                "event_count": 0,
+                "total_tokens": 0,
+                "priced_token_total": 0,
+                "unpriced_token_total": 0,
+                "reference_usd_estimate": 0.0,
+                "workspace_labels": set(),
+                "session_keys": set(),
+            },
+        )
+        bucket["event_count"] += 1
+        bucket["total_tokens"] += int(row["total_tokens"])
+        if row["estimate_status"] == "priced":
+            bucket["priced_token_total"] += int(row["total_tokens"])
+            bucket["reference_usd_estimate"] += float(row["amount"] or 0.0)
+        else:
+            bucket["unpriced_token_total"] += int(row["total_tokens"])
+        bucket["workspace_labels"].add(
+            render_workspace_label_for_row(
+                row,
+                redaction_mode=redaction_mode,
+                alias_map=alias_map,
+            )
+        )
+        if row["session_key"] is not None:
+            bucket["session_keys"].add(row["session_key"])
+    items = []
+    for bucket in heavy_hitters.values():
+        items.append(
+            {
+                "agent_run_key": str(bucket["agent_run_key"]),
+                "agent_name": bucket["agent_name"],
+                "agent_role": bucket["agent_role"],
+                "agent_kind": str(bucket["agent_kind"]),
+                "lineage_status": bucket["lineage_status"],
+                "requested_model_id": bucket["requested_model_id"],
+                "observed_model_id": bucket["observed_model_id"],
+                "event_count": int(bucket["event_count"]),
+                "total_tokens": int(bucket["total_tokens"]),
+                "priced_token_total": int(bucket["priced_token_total"]),
+                "unpriced_token_total": int(bucket["unpriced_token_total"]),
+                "reference_usd_estimate": float(bucket["reference_usd_estimate"]),
+                "workspace_count": len(bucket["workspace_labels"]),
+                "workspace_labels": sorted(bucket["workspace_labels"]),
+                "session_count": len(bucket["session_keys"]),
+            }
+        )
+    return sorted(
+        items,
+        key=lambda item: (-int(item["total_tokens"]), str(item["agent_run_key"])),
+    )
 
 
 def _count_mix(rows: list[dict[str, str | None]], key: str) -> list[dict[str, Any]]:
@@ -551,18 +651,3 @@ def _count_mix(rows: list[dict[str, str | None]], key: str) -> list[dict[str, An
     for row in rows:
         counts[str(row[key])] += 1
     return [{"label": label, "count": counts[label]} for label in sorted(counts)]
-
-
-def _workspace_proxy(values: dict[str, str]) -> Any:
-    class WorkspaceProxy:
-        workspace_key = values["workspace_key"]
-        display_label = values["display_label"]
-        redacted_display_label = values["redacted_display_label"]
-        resolved_root_path = values["resolved_root_path"]
-        resolution_strategy = values["resolution_strategy"]
-
-        @property
-        def redacted_label(self) -> str:
-            return self.redacted_display_label
-
-    return WorkspaceProxy()

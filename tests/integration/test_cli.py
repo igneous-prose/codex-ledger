@@ -393,3 +393,107 @@ def test_price_coverage_command_emits_json_diagnostics(tmp_path: Path) -> None:
     assert payload["schema_version"] == "phase3-pricing-coverage-v1"
     assert payload["summary"]["priced_event_count"] == 1
     assert payload["summary"]["unpriced_event_count"] == 0
+
+
+def test_report_aggregate_command_emits_json(tmp_path: Path) -> None:
+    archive_home = tmp_path / "archive"
+    fixture = Path(__file__).resolve().parents[1] / "fixtures" / "codex" / "sample_rollout.jsonl"
+    env = {**os.environ, "PYTHONPATH": "src"}
+    session_dir = tmp_path / ".codex" / "sessions" / "2026" / "04" / "22"
+    session_dir.mkdir(parents=True)
+    target = session_dir / fixture.name
+    target.write_text(fixture.read_text(encoding="utf-8"), encoding="utf-8")
+
+    sync_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "sync",
+            "--archive-home",
+            str(archive_home),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env={**env, "HOME": str(tmp_path)},
+    )
+    assert sync_result.returncode == 0
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "report",
+            "aggregate",
+            "--period",
+            "month",
+            "--as-of",
+            "2026-04-30",
+            "--format",
+            "json",
+            "--archive-home",
+            str(archive_home),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == "phase4-aggregate-report-v1"
+    assert payload["pricing"]["selected_rule_set_id"] == "reference_usd_openai_standard_2026_04_07"
+
+
+def test_explain_day_command_emits_json(tmp_path: Path) -> None:
+    archive_home = tmp_path / "archive"
+    fixture = Path(__file__).resolve().parents[1] / "fixtures" / "codex" / "sample_rollout.jsonl"
+    env = {**os.environ, "PYTHONPATH": "src"}
+    session_dir = tmp_path / ".codex" / "sessions" / "2026" / "04" / "01"
+    session_dir.mkdir(parents=True)
+    target = session_dir / fixture.name
+    target.write_text(fixture.read_text(encoding="utf-8"), encoding="utf-8")
+
+    sync_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "sync",
+            "--archive-home",
+            str(archive_home),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env={**env, "HOME": str(tmp_path)},
+    )
+    assert sync_result.returncode == 0
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "explain",
+            "day",
+            "--date",
+            "2026-04-01",
+            "--format",
+            "json",
+            "--archive-home",
+            str(archive_home),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == "phase4-explain-report-v1"
+    assert payload["source_artifacts"]

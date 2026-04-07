@@ -1,7 +1,7 @@
 # Architecture
 
-Phase 3 keeps the Phase 1 and Phase 2 import path, preserves the Phase 2.1 observability
-layer, and adds deterministic event-level pricing:
+Phase 4 keeps the Phase 1 to Phase 3 storage path intact and adds read-only report and
+explainability surfaces on top of the canonical ledger:
 
 - discover local rollout files from `~/.codex/sessions/**` and `~/.codex/archived_sessions/**`
 - copy source artifacts into the external archive under `raw/` using content-addressed paths
@@ -14,7 +14,7 @@ layer, and adds deterministic event-level pricing:
 - load versioned pricing rules from repo-tracked JSON files
 - calculate event-level reference USD estimates from observed execution models
 - expose pricing recalculation and coverage diagnostics without mutating canonical events
-- expose grouped CLI entrypoints for `sync` and `import codex-json`
+- expose grouped CLI entrypoints for aggregate, workspace, agent, and explain reports
 
 Workspace resolution currently prefers:
 
@@ -47,5 +47,19 @@ Pricing remains layered on top of the canonical event ledger:
 4. write one `cost_estimates` row per event and rule set
 5. derive later workspace, session, model, or agent totals by rollup from priced events
 
-Phase 3 does not create canonical aggregate pricing tables. Unknown or unsupported pricing
-is preserved as an explicit estimate state rather than an invented numeric value.
+Phase 4 still does not create canonical aggregate tables. Reports are built from joins and
+queries over `usage_events`, `agent_runs`, `workspaces`, `provider_sessions`, `raw_files`,
+and `cost_estimates`.
+
+Rule-set selection in reports is deterministic:
+
+1. if `--rule-set` is provided, use it
+2. otherwise select the latest stable local rule set
+3. if no stable local rule set exists, omit cost explicitly
+
+Cost-bearing reports always carry:
+
+- the selected rule set or explicit omission reason
+- priced versus unpriced token totals
+- a coverage status of `full`, `partial`, `none`, `no_events`, or `omitted`
+- warnings when the reference USD estimate is incomplete
