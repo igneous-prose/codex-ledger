@@ -13,6 +13,12 @@ from codex_ledger.ingest.service import (
     sync_local_codex,
 )
 from codex_ledger.paths import ensure_archive_home_layout, resolve_archive_home
+from codex_ledger.pricing.service import (
+    build_pricing_coverage,
+    format_pricing_coverage_table,
+    format_pricing_recalc_table,
+    recalculate_event_costs,
+)
 from codex_ledger.reports.agents import (
     build_agent_report,
     explain_agent_run,
@@ -64,6 +70,55 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the archive home directory for this run.",
     )
     import_codex_parser.set_defaults(handler=run_import_codex_json)
+
+    price_parser = subparsers.add_parser(
+        "price",
+        help="Recalculate or inspect event-level pricing estimates.",
+    )
+    price_subparsers = price_parser.add_subparsers(dest="price_command")
+    price_recalc_parser = price_subparsers.add_parser(
+        "recalc",
+        help="Recalculate deterministic event-level estimates for one pricing rule set.",
+    )
+    price_recalc_parser.add_argument(
+        "--rule-set",
+        required=True,
+        help="Pricing rule set identifier.",
+    )
+    price_recalc_parser.add_argument(
+        "--archive-home",
+        type=Path,
+        help="Override the archive home directory for this run.",
+    )
+    price_recalc_parser.set_defaults(handler=run_price_recalc)
+
+    price_coverage_parser = price_subparsers.add_parser(
+        "coverage",
+        help="Inspect priced versus unpriced event coverage for one pricing rule set.",
+    )
+    price_coverage_parser.add_argument(
+        "--rule-set",
+        required=True,
+        help="Pricing rule set identifier.",
+    )
+    price_coverage_parser.add_argument(
+        "--format",
+        choices=("json", "table"),
+        default="table",
+        help="Output format.",
+    )
+    price_coverage_parser.add_argument(
+        "--redaction-mode",
+        choices=("redacted", "alias", "full"),
+        default="redacted",
+        help="Workspace label representation.",
+    )
+    price_coverage_parser.add_argument(
+        "--archive-home",
+        type=Path,
+        help="Override the archive home directory for this run.",
+    )
+    price_coverage_parser.set_defaults(handler=run_price_coverage)
 
     report_parser = subparsers.add_parser(
         "report",
@@ -203,6 +258,30 @@ def run_import_codex_json(args: argparse.Namespace) -> int:
         if outcome.detail:
             print(f"detail: {outcome.detail}")
     return 0 if summary.failed_file_count == 0 else 1
+
+
+def run_price_recalc(args: argparse.Namespace) -> int:
+    archive_home = _resolve_archive_home_argument(args.archive_home)
+    payload = recalculate_event_costs(
+        archive_home=archive_home,
+        rule_set_id=args.rule_set,
+    )
+    print(format_pricing_recalc_table(payload))
+    return 0
+
+
+def run_price_coverage(args: argparse.Namespace) -> int:
+    archive_home = _resolve_archive_home_argument(args.archive_home)
+    payload = build_pricing_coverage(
+        archive_home=archive_home,
+        rule_set_id=args.rule_set,
+        redaction_mode=args.redaction_mode,
+    )
+    if args.format == "json":
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(format_pricing_coverage_table(payload))
+    return 0
 
 
 def run_doctor(args: argparse.Namespace) -> int:

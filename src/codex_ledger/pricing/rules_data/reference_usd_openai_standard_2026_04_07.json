@@ -1,0 +1,59 @@
+{
+  "schema_version": "pricing-rule-set-v1",
+  "rule_set_id": "reference_usd_openai_standard_2026_04_07",
+  "pricing_plane": "reference_usd",
+  "currency": "USD",
+  "version": "2026-04-07",
+  "effective_from_utc": "2026-03-05T00:00:00Z",
+  "effective_to_utc": null,
+  "stability": "reference",
+  "confidence": "high",
+  "token_mapping": {
+    "input_tokens_field": "input_tokens",
+    "cached_input_tokens_field": "cached_input_tokens",
+    "output_tokens_field": "output_tokens",
+    "cached_input_behavior": "subtract_from_input"
+  },
+  "provenance": {
+    "source_urls": [
+      "https://openai.com/api/pricing/",
+      "https://developers.openai.com/api/docs/models/gpt-5.4",
+      "https://developers.openai.com/api/docs/models/gpt-5.4-mini"
+    ],
+    "notes": "Reference USD estimate using public OpenAI standard token pricing for observed execution models only."
+  },
+  "rules": [
+    {
+      "rule_id": "gpt-5.4-standard-2026-03-05",
+      "provider": "codex",
+      "model_id": "gpt-5.4",
+      "effective_from_utc": "2026-03-05T00:00:00Z",
+      "effective_to_utc": null,
+      "input_usd_per_1m": "2.50",
+      "cached_input_usd_per_1m": "0.25",
+      "output_usd_per_1m": "15.00",
+      "stability": "reference",
+      "confidence": "high",
+      "provenance": {
+        "source_url": "https://developers.openai.com/api/docs/models/gpt-5.4",
+        "notes": "GPT-5.4 model page lists standard input, cached input, and output token pricing."
+      }
+    },
+    {
+      "rule_id": "gpt-5.4-mini-standard-2026-03-17",
+      "provider": "codex",
+      "model_id": "gpt-5.4-mini",
+      "effective_from_utc": "2026-03-17T00:00:00Z",
+      "effective_to_utc": null,
+      "input_usd_per_1m": "0.75",
+      "cached_input_usd_per_1m": "0.075",
+      "output_usd_per_1m": "4.50",
+      "stability": "reference",
+      "confidence": "high",
+      "provenance": {
+        "source_url": "https://developers.openai.com/api/docs/models/gpt-5.4-mini",
+        "notes": "GPT-5.4 mini model page lists standard input, cached input, and output token pricing."
+      }
+    }
+  ]
+}

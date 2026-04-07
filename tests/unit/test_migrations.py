@@ -16,6 +16,7 @@ def test_apply_migrations_creates_schema_tracking_table(tmp_path: Path) -> None:
         "0002_phase1_ledger.sql",
         "0003_phase2_workspace_lineage.sql",
         "0004_phase21_agent_observability.sql",
+        "0005_phase3_pricing.sql",
     ]
 
     connection = sqlite3.connect(database_path)
@@ -34,11 +35,14 @@ def test_apply_migrations_creates_schema_tracking_table(tmp_path: Path) -> None:
         ("0002", "0002_phase1_ledger.sql"),
         ("0003", "0003_phase2_workspace_lineage.sql"),
         ("0004", "0004_phase21_agent_observability.sql"),
+        ("0005", "0005_phase3_pricing.sql"),
     ]
     assert {
         "agent_runs",
+        "cost_estimates",
         "import_batches",
         "models",
+        "pricing_rule_sets",
         "provider_sessions",
         "raw_files",
         "schema_migrations",

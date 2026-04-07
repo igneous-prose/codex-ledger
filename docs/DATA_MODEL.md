@@ -2,14 +2,16 @@
 
 The canonical v1 ledger is event-level and SQLite-backed.
 
-Phase 2.1 keeps the same event-level canonical ledger and extends the workspace,
-lineage, and agent observability surfaces. The canonical tables are:
+Phase 3 keeps the same event-level canonical ledger and adds deterministic event-level
+pricing estimates. The canonical tables are:
 
 - `import_batches`
 - `raw_files`
 - `provider_sessions`
 - `agent_runs`
 - `usage_events`
+- `pricing_rule_sets`
+- `cost_estimates`
 - `workspaces`
 - `workspace_aliases`
 - `models`
@@ -53,3 +55,19 @@ The current canonical lineage states are:
 
 Parent spawn intents and imported child sessions are both preserved. Spawn rows may have
 zero usage events; event-bearing child runs remain the canonical source of subagent usage.
+
+Phase 3 adds:
+
+- `pricing_rule_sets` for loaded repo-tracked rule metadata
+- `cost_estimates` for deterministic event-level reference USD estimates
+
+`cost_estimates` is keyed by `(event_id, rule_set_id, pricing_plane)` and stores:
+
+- `amount` in the declared rule-set currency
+- `confidence`
+- `estimate_status`
+- `explanation_json`
+- `computed_at_utc`
+
+Only `usage_events` receive pricing rows. Zero-event spawn placeholders and root
+placeholders never receive independent cost rows.

@@ -39,6 +39,10 @@ dev = [
 include = [
   "src/codex_ledger/**/*.py",
   "src/codex_ledger/migrations/*.sql",
+  "src/codex_ledger/pricing/rules_data/*.json",
+  "pricing/README.md",
+  "pricing/rules/*.json",
+  "pricing/rules/README.md",
   "README.md",
   "LICENSE",
 ]

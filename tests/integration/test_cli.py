@@ -21,6 +21,7 @@ def test_module_help_is_clean() -> None:
     assert "doctor" in result.stdout
     assert "sync" in result.stdout
     assert "import" in result.stdout
+    assert "price" in result.stdout
     assert "report" in result.stdout
     assert "explain" in result.stdout
     assert "migrate" in result.stdout
@@ -42,6 +43,7 @@ def test_migrate_command_creates_database(tmp_path: Path) -> None:
     assert "0002_phase1_ledger.sql" in result.stdout
     assert "0003_phase2_workspace_lineage.sql" in result.stdout
     assert "0004_phase21_agent_observability.sql" in result.stdout
+    assert "0005_phase3_pricing.sql" in result.stdout
 
 
 def test_import_codex_json_command_imports_fixture(tmp_path: Path) -> None:
@@ -130,6 +132,7 @@ def test_doctor_reports_persistence_source_dirs_database_and_migrations(tmp_path
         "0002_phase1_ledger.sql",
         "0003_phase2_workspace_lineage.sql",
         "0004_phase21_agent_observability.sql",
+        "0005_phase3_pricing.sql",
     ]
     assert payload["source_roots"] == [
         {
@@ -319,3 +322,74 @@ def test_explain_agent_command_defaults_to_redacted_workspace_output(tmp_path: P
     serialized = json.dumps(payload, sort_keys=True)
     assert str(workspace_root) not in serialized
     assert str(nested) not in serialized
+
+
+def test_price_coverage_command_emits_json_diagnostics(tmp_path: Path) -> None:
+    archive_home = tmp_path / "archive"
+    fixture = Path(__file__).resolve().parents[1] / "fixtures" / "codex" / "sample_rollout.jsonl"
+    env = {**os.environ, "PYTHONPATH": "src"}
+    session_dir = tmp_path / ".codex" / "sessions" / "2026" / "04" / "20"
+    session_dir.mkdir(parents=True)
+    target = session_dir / fixture.name
+    target.write_text(fixture.read_text(encoding="utf-8"), encoding="utf-8")
+
+    sync_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "sync",
+            "--archive-home",
+            str(archive_home),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env={**env, "HOME": str(tmp_path)},
+    )
+    assert sync_result.returncode == 0
+
+    price_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "price",
+            "recalc",
+            "--rule-set",
+            "reference_usd_openai_standard_2026_04_07",
+            "--archive-home",
+            str(archive_home),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env=env,
+    )
+    assert price_result.returncode == 0
+
+    coverage_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "price",
+            "coverage",
+            "--rule-set",
+            "reference_usd_openai_standard_2026_04_07",
+            "--format",
+            "json",
+            "--archive-home",
+            str(archive_home),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env=env,
+    )
+
+    assert coverage_result.returncode == 0
+    payload = json.loads(coverage_result.stdout)
+    assert payload["schema_version"] == "phase3-pricing-coverage-v1"
+    assert payload["summary"]["priced_event_count"] == 1
+    assert payload["summary"]["unpriced_event_count"] == 0
