@@ -75,9 +75,7 @@ def list_rule_files() -> tuple[Path, ...]:
     repo_rule_dir = repo_root / "pricing" / "rules"
     paths: list[Path] = []
     if repo_rule_dir.exists():
-        paths.extend(
-            path for path in sorted(repo_rule_dir.glob("*.json")) if path.is_file()
-        )
+        paths.extend(path for path in sorted(repo_rule_dir.glob("*.json")) if path.is_file())
     if paths:
         return tuple(paths)
 
@@ -138,9 +136,7 @@ def select_rule(
         )
 
     model_rules = [
-        rule
-        for rule in rule_set.rules
-        if rule.provider == provider and rule.model_id == model_id
+        rule for rule in rule_set.rules if rule.provider == provider and rule.model_id == model_id
     ]
     if not model_rules:
         return RuleSelection(
@@ -175,9 +171,7 @@ def _validate_rule_set(rule_set: PricingRuleSet) -> None:
             raise PricingRuleValidationError(f"Negative input price: {rule.rule_id}")
         if rule.output_usd_per_1m < Decimal("0"):
             raise PricingRuleValidationError(f"Negative output price: {rule.rule_id}")
-        if rule.cached_input_usd_per_1m is not None and rule.cached_input_usd_per_1m < Decimal(
-            "0"
-        ):
+        if rule.cached_input_usd_per_1m is not None and rule.cached_input_usd_per_1m < Decimal("0"):
             raise PricingRuleValidationError(f"Negative cached input price: {rule.rule_id}")
 
         window_key = (rule.provider, rule.model_id)

@@ -265,9 +265,7 @@ def test_cached_input_tokens_are_priced_explicitly(tmp_path: Path) -> None:
 
     connection = open_database(archive_home)
     try:
-        row = connection.execute(
-            "SELECT amount, explanation_json FROM cost_estimates"
-        ).fetchone()
+        row = connection.execute("SELECT amount, explanation_json FROM cost_estimates").fetchone()
     finally:
         connection.close()
 

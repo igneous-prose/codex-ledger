@@ -329,9 +329,7 @@ def _estimate_event_cost(event: PricingEvent, rule_set: PricingRuleSet) -> CostE
 
     rule = selection.rule
     cached_tokens = (
-        event.cached_input_tokens
-        if rule_set.token_mapping.cached_input_tokens_field
-        else 0
+        event.cached_input_tokens if rule_set.token_mapping.cached_input_tokens_field else 0
     )
     if rule_set.token_mapping.cached_input_behavior == "subtract_from_input":
         billable_input_tokens = max(event.input_tokens - cached_tokens, 0)
