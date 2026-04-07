@@ -44,7 +44,7 @@ def test_report_schema_validation_rejects_invalid_saved_json(tmp_path: Path) -> 
         json.dumps(
             {
                 "generated_at_utc": "2026-04-07T00:00:00Z",
-                "generator_version": "0.1.0a0",
+                "generator_version": "0.1.0",
                 "filters": {},
                 "timezone": "UTC",
                 "pricing": {},

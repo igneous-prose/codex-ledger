@@ -29,7 +29,14 @@ uv sync --group dev
 uv run codex-ledger --help
 ```
 
-The intended packaged install surface is:
+For local wheel validation before publication:
+
+```bash
+uv build
+pipx install ./dist/codex_ledger-0.1.0-py3-none-any.whl
+```
+
+After the package is actually published, the intended install surface is:
 
 ```bash
 pipx install codex-ledger
@@ -40,31 +47,31 @@ pipx install codex-ledger
 Inspect the current environment and migration status:
 
 ```bash
-uv run codex-ledger doctor
+codex-ledger doctor
 ```
 
 Import locally persisted rollout files:
 
 ```bash
-uv run codex-ledger sync
+codex-ledger sync
 ```
 
 Import an explicit Codex JSON file:
 
 ```bash
-uv run codex-ledger import codex-json --input ./sample-report.json
+codex-ledger import codex-json --input ./sample-report.json
 ```
 
 Recalculate reference USD pricing:
 
 ```bash
-uv run codex-ledger price recalc --rule-set reference_usd_openai_standard_2026_04_07
+codex-ledger price recalc --rule-set reference_usd_openai_standard_2026_04_07
 ```
 
 Write a deterministic aggregate report JSON artifact:
 
 ```bash
-uv run codex-ledger report aggregate \
+codex-ledger report aggregate \
   --period month \
   --as-of 2026-04-30 \
   --output ./artifacts/aggregate.json
@@ -73,7 +80,7 @@ uv run codex-ledger report aggregate \
 Render a heatmap from the saved report JSON:
 
 ```bash
-uv run codex-ledger render heatmap \
+codex-ledger render heatmap \
   --report ./artifacts/aggregate.json \
   --output ./artifacts/aggregate.png
 ```
@@ -81,12 +88,12 @@ uv run codex-ledger render heatmap \
 Render static workspace HTML from a workspace report JSON artifact:
 
 ```bash
-uv run codex-ledger report workspace \
+codex-ledger report workspace \
   --period month \
   --as-of 2026-04-30 \
   --output ./artifacts/workspaces.json
 
-uv run codex-ledger render workspace-html \
+codex-ledger render workspace-html \
   --report ./artifacts/workspaces.json \
   --output ./artifacts/workspaces.html
 ```
@@ -94,14 +101,14 @@ uv run codex-ledger render workspace-html \
 Run read-only verification:
 
 ```bash
-uv run codex-ledger verify ledger
-uv run codex-ledger verify reports
+codex-ledger verify ledger
+codex-ledger verify reports
 ```
 
 Compare a reference summary against current derived totals:
 
 ```bash
-uv run codex-ledger reconcile reference --input ./reference-summary.json
+codex-ledger reconcile reference --input ./reference-summary.json
 ```
 
 ## Privacy Defaults

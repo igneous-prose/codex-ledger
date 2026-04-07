@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0
 
 - v1 delivery layer now includes the canonical event ledger, workspace resolution,
   agent/subagent lineage, reference USD pricing, report generation, explainability,
