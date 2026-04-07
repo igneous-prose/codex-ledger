@@ -23,7 +23,10 @@ def test_module_help_is_clean() -> None:
     assert "import" in result.stdout
     assert "price" in result.stdout
     assert "report" in result.stdout
+    assert "render" in result.stdout
     assert "explain" in result.stdout
+    assert "verify" in result.stdout
+    assert "reconcile" in result.stdout
     assert "migrate" in result.stdout
 
 
@@ -446,6 +449,176 @@ def test_report_aggregate_command_emits_json(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
     assert payload["schema_version"] == "phase4-aggregate-report-v1"
     assert payload["pricing"]["selected_rule_set_id"] == "reference_usd_openai_standard_2026_04_07"
+
+
+def test_report_output_and_render_commands_write_artifacts(tmp_path: Path) -> None:
+    archive_home = tmp_path / "archive"
+    fixture = Path(__file__).resolve().parents[1] / "fixtures" / "codex" / "sample_rollout.jsonl"
+    env = {**os.environ, "PYTHONPATH": "src"}
+    session_dir = tmp_path / ".codex" / "sessions" / "2026" / "04" / "23"
+    session_dir.mkdir(parents=True)
+    target = session_dir / fixture.name
+    target.write_text(fixture.read_text(encoding="utf-8"), encoding="utf-8")
+
+    sync_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "sync",
+            "--archive-home",
+            str(archive_home),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env={**env, "HOME": str(tmp_path)},
+    )
+    assert sync_result.returncode == 0
+
+    report_path = tmp_path / "aggregate.json"
+    report_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "report",
+            "aggregate",
+            "--period",
+            "day",
+            "--as-of",
+            "2026-04-01",
+            "--archive-home",
+            str(archive_home),
+            "--output",
+            str(report_path),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env=env,
+    )
+    assert report_result.returncode == 0
+    assert report_path.exists()
+    report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report_payload["schema_version"] == "phase4-aggregate-report-v1"
+
+    render_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "render",
+            "heatmap",
+            "--report",
+            str(report_path),
+            "--output",
+            str(tmp_path / "aggregate.png"),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env=env,
+    )
+    assert render_result.returncode == 0
+    assert (tmp_path / "aggregate.png").exists()
+    assert (tmp_path / "aggregate.png.provenance.json").exists()
+
+
+def test_verify_and_reconcile_commands_report_mismatches(tmp_path: Path) -> None:
+    archive_home = tmp_path / "archive"
+    fixture = Path(__file__).resolve().parents[1] / "fixtures" / "codex" / "sample_rollout.jsonl"
+    env = {**os.environ, "PYTHONPATH": "src"}
+    session_dir = tmp_path / ".codex" / "sessions" / "2026" / "04" / "24"
+    session_dir.mkdir(parents=True)
+    target = session_dir / fixture.name
+    target.write_text(fixture.read_text(encoding="utf-8"), encoding="utf-8")
+
+    sync_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "sync",
+            "--archive-home",
+            str(archive_home),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env={**env, "HOME": str(tmp_path)},
+    )
+    assert sync_result.returncode == 0
+
+    price_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "price",
+            "recalc",
+            "--rule-set",
+            "reference_usd_openai_standard_2026_04_07",
+            "--archive-home",
+            str(archive_home),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env=env,
+    )
+    assert price_result.returncode == 0
+
+    verify_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "verify",
+            "ledger",
+            "--archive-home",
+            str(archive_home),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env=env,
+    )
+    assert verify_result.returncode == 0
+
+    reference_path = tmp_path / "reference.json"
+    reference_path.write_text(
+        json.dumps(
+            {
+                "filters": {"period": "day", "as_of": "2026-04-01"},
+                "summary": {"total_tokens": 999},
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    reconcile_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "reconcile",
+            "reference",
+            "--input",
+            str(reference_path),
+            "--archive-home",
+            str(archive_home),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env=env,
+    )
+
+    assert reconcile_result.returncode == 1
+    assert "total_tokens" in reconcile_result.stdout
 
 
 def test_explain_day_command_emits_json(tmp_path: Path) -> None:

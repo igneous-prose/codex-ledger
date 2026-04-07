@@ -11,3 +11,5 @@ Current schema files:
 
 The schemas intentionally validate the stable top-level contract and major blocks rather
 than every nested analytic detail.
+
+Saved report JSON artifacts are validated against these schemas before render time.

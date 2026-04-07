@@ -23,7 +23,9 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Topic :: Utilities",
 ]
-dependencies = []
+dependencies = [
+  "Pillow>=10.4",
+]
 
 [project.scripts]
 codex-ledger = "codex_ledger.cli.main:main"
@@ -40,9 +42,12 @@ include = [
   "src/codex_ledger/**/*.py",
   "src/codex_ledger/migrations/*.sql",
   "src/codex_ledger/pricing/rules_data/*.json",
+  "src/codex_ledger/reports/schemas_data/*.json",
   "pricing/README.md",
   "pricing/rules/*.json",
   "pricing/rules/README.md",
+  "schemas/reports/*.json",
+  "schemas/reports/README.md",
   "README.md",
   "LICENSE",
 ]

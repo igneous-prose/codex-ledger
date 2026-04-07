@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
@@ -19,6 +20,8 @@ from codex_ledger.pricing.service import (
     format_pricing_recalc_table,
     recalculate_event_costs,
 )
+from codex_ledger.reconcile.service import format_reconcile_table, reconcile_reference
+from codex_ledger.render.service import render_heatmap, render_workspace_html
 from codex_ledger.reports.agents import (
     build_agent_report,
     explain_agent_run,
@@ -29,17 +32,20 @@ from codex_ledger.reports.aggregate import (
     build_aggregate_report,
     format_aggregate_report_table,
 )
+from codex_ledger.reports.artifacts import write_report_artifact
 from codex_ledger.reports.explain import (
     explain_day,
     explain_model,
     explain_workspace,
     format_explain_table,
 )
+from codex_ledger.reports.schema import ReportValidationError, load_report_file
 from codex_ledger.reports.workspaces import (
     build_workspace_report,
     format_workspace_report_table,
 )
 from codex_ledger.storage.migrations import apply_migrations, default_database_path
+from codex_ledger.verify.service import format_verify_table, verify_ledger, verify_reports
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -170,6 +176,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Override the archive home directory for this run.",
     )
+    report_aggregate_parser.add_argument(
+        "--output",
+        type=Path,
+        help="Write deterministic report JSON to this path.",
+    )
     report_aggregate_parser.set_defaults(handler=run_report_aggregate)
 
     report_workspace_parser = report_subparsers.add_parser(
@@ -208,6 +219,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--archive-home",
         type=Path,
         help="Override the archive home directory for this run.",
+    )
+    report_workspace_parser.add_argument(
+        "--output",
+        type=Path,
+        help="Write deterministic report JSON to this path.",
     )
     report_workspace_parser.set_defaults(handler=run_report_workspace)
 
@@ -248,7 +264,35 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Override the archive home directory for this run.",
     )
+    report_agents_parser.add_argument(
+        "--output",
+        type=Path,
+        help="Write deterministic report JSON to this path.",
+    )
     report_agents_parser.set_defaults(handler=run_report_agents)
+
+    render_parser = subparsers.add_parser(
+        "render",
+        help="Render saved report artifacts into static delivery formats.",
+    )
+    render_subparsers = render_parser.add_subparsers(dest="render_command")
+    render_heatmap_parser = render_subparsers.add_parser(
+        "heatmap",
+        help="Render an aggregate report JSON artifact as a PNG heatmap.",
+    )
+    render_heatmap_parser.add_argument("--report", type=Path, required=True)
+    render_heatmap_parser.add_argument("--output", type=Path, required=True)
+    render_heatmap_parser.add_argument("--sidecar", type=Path)
+    render_heatmap_parser.set_defaults(handler=run_render_heatmap)
+
+    render_workspace_parser = render_subparsers.add_parser(
+        "workspace-html",
+        help="Render a workspace report JSON artifact as static HTML.",
+    )
+    render_workspace_parser.add_argument("--report", type=Path, required=True)
+    render_workspace_parser.add_argument("--output", type=Path, required=True)
+    render_workspace_parser.add_argument("--sidecar", type=Path)
+    render_workspace_parser.set_defaults(handler=run_render_workspace_html)
 
     explain_parser = subparsers.add_parser(
         "explain",
@@ -396,6 +440,51 @@ def build_parser() -> argparse.ArgumentParser:
     )
     explain_agent_parser.set_defaults(handler=run_explain_agent)
 
+    verify_parser = subparsers.add_parser(
+        "verify",
+        help="Run read-only consistency checks against the ledger and report layer.",
+    )
+    verify_subparsers = verify_parser.add_subparsers(dest="verify_command")
+    verify_ledger_parser = verify_subparsers.add_parser(
+        "ledger",
+        help="Verify ledger and pricing invariants.",
+    )
+    verify_ledger_parser.add_argument("--archive-home", type=Path)
+    verify_ledger_parser.add_argument("--json", action="store_true", dest="as_json")
+    verify_ledger_parser.set_defaults(handler=run_verify_ledger)
+
+    verify_reports_parser = verify_subparsers.add_parser(
+        "reports",
+        help="Verify derived report totals against the ledger and cost estimates.",
+    )
+    verify_reports_parser.add_argument("--rule-set")
+    verify_reports_parser.add_argument("--archive-home", type=Path)
+    verify_reports_parser.add_argument("--json", action="store_true", dest="as_json")
+    verify_reports_parser.set_defaults(handler=run_verify_reports)
+
+    reconcile_parser = subparsers.add_parser(
+        "reconcile",
+        help="Compare a reference summary against the current derived ledger totals.",
+    )
+    reconcile_subparsers = reconcile_parser.add_subparsers(dest="reconcile_command")
+    reconcile_reference_parser = reconcile_subparsers.add_parser(
+        "reference",
+        help="Compare a reference JSON summary against current derived aggregate totals.",
+    )
+    reconcile_reference_parser.add_argument("--input", type=Path, required=True)
+    reconcile_reference_parser.add_argument(
+        "--period",
+        choices=("day", "week", "month", "year"),
+    )
+    reconcile_reference_parser.add_argument("--as-of", type=_parse_date)
+    reconcile_reference_parser.add_argument(
+        "--format",
+        choices=("json", "table"),
+        default="table",
+    )
+    reconcile_reference_parser.add_argument("--archive-home", type=Path)
+    reconcile_reference_parser.set_defaults(handler=run_reconcile_reference)
+
     doctor_parser = subparsers.add_parser(
         "doctor",
         help="Inspect local archive-home and expected discovery paths.",
@@ -521,6 +610,7 @@ def run_report_aggregate(args: argparse.Namespace) -> int:
         as_of=args.as_of,
         rule_set_id=args.rule_set,
     )
+    _maybe_write_report_output(payload, args.output)
     if args.format == "json":
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
@@ -537,6 +627,7 @@ def run_report_workspace(args: argparse.Namespace) -> int:
         rule_set_id=args.rule_set,
         redaction_mode=args.redaction_mode,
     )
+    _maybe_write_report_output(payload, args.output)
     if args.format == "json":
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
@@ -553,6 +644,7 @@ def run_report_agents(args: argparse.Namespace) -> int:
         rule_set_id=args.rule_set,
         redaction_mode=args.redaction_mode,
     )
+    _maybe_write_report_output(payload, args.output)
     if args.format == "json":
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
@@ -622,6 +714,68 @@ def run_explain_agent(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_render_heatmap(args: argparse.Namespace) -> int:
+    load_report_file(args.report)
+    result = render_heatmap(
+        report_path=args.report,
+        output_path=args.output,
+        sidecar_path=args.sidecar,
+    )
+    print(f"Rendered heatmap: {result['output_path']}")
+    print(f"Sidecar: {result['sidecar_path']}")
+    return 0
+
+
+def run_render_workspace_html(args: argparse.Namespace) -> int:
+    load_report_file(args.report)
+    result = render_workspace_html(
+        report_path=args.report,
+        output_path=args.output,
+        sidecar_path=args.sidecar,
+    )
+    print(f"Rendered workspace HTML: {result['output_path']}")
+    print(f"Sidecar: {result['sidecar_path']}")
+    return 0
+
+
+def run_verify_ledger(args: argparse.Namespace) -> int:
+    archive_home = _resolve_archive_home_argument(args.archive_home)
+    payload = verify_ledger(archive_home)
+    if args.as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(format_verify_table(payload, label="ledger"))
+    return 0 if payload["ok"] else 1
+
+
+def run_verify_reports(args: argparse.Namespace) -> int:
+    archive_home = _resolve_archive_home_argument(args.archive_home)
+    payload = verify_reports(
+        archive_home=archive_home,
+        rule_set_id=args.rule_set,
+    )
+    if args.as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(format_verify_table(payload, label="reports"))
+    return 0 if payload["ok"] else 1
+
+
+def run_reconcile_reference(args: argparse.Namespace) -> int:
+    archive_home = _resolve_archive_home_argument(args.archive_home)
+    payload = reconcile_reference(
+        archive_home=archive_home,
+        input_path=args.input,
+        period=args.period,
+        as_of=args.as_of,
+    )
+    if args.format == "json":
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(format_reconcile_table(payload))
+    return 0 if payload["ok"] else 1
+
+
 def run_migrate(args: argparse.Namespace) -> int:
     if args.database is not None:
         database_path = args.database.expanduser().resolve(strict=False)
@@ -651,6 +805,12 @@ def _parse_date(value: str) -> date:
     return date.fromisoformat(value)
 
 
+def _maybe_write_report_output(payload: dict[str, object], output_path: Path | None) -> None:
+    if output_path is None:
+        return
+    write_report_artifact(payload, output_path)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -659,4 +819,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if handler is None:
         parser.print_help()
         return 0
-    return int(handler(args))
+    try:
+        return int(handler(args))
+    except (ReportValidationError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1

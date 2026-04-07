@@ -72,8 +72,9 @@ Phase 3 adds:
 Only `usage_events` receive pricing rows. Zero-event spawn placeholders and root
 placeholders never receive independent cost rows.
 
-Phase 4 does not add new canonical tables. Instead it derives report payloads from joins
-across the existing canonical tables and `cost_estimates`.
+Phase 4 and Phase 5 do not add new canonical aggregate tables. Report payloads, render
+sidecars, verify results, and reconcile diffs are all derived from joins across the
+existing canonical tables and `cost_estimates`.
 
 The stable report and explain outputs now carry:
 
@@ -92,3 +93,7 @@ When pricing is included, reports distinguish:
 - reference USD estimate over priced events only
 
 When pricing is omitted, the report metadata says so explicitly.
+
+Saved report JSON artifacts are validated delivery outputs, not new canonical storage.
+Rendered PNG and HTML artifacts also remain non-canonical and are traced by provenance
+sidecars rather than embedded back into SQLite.

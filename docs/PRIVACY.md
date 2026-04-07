@@ -2,7 +2,7 @@
 
 Codex Ledger keeps sensitive provenance local to the archive home.
 
-Phase 2 stores both internal and outward-facing workspace fields:
+The ledger stores both internal and outward-facing workspace fields:
 
 - internal: `raw_cwd`, `resolved_root_path`, source file paths, and content hashes
 - outward-facing defaults: `display_label`, `redacted_display_label`, and `workspace_key`
@@ -16,7 +16,7 @@ The implemented workspace label modes are:
 Absolute paths remain ledger-internal by default. The current implementation does not
 emit them in default CLI output, fixtures, or docs examples.
 
-Phase 4 aggregate, workspace, agent, and explain commands keep the same privacy defaults:
+Aggregate, workspace, agent, explain, and render surfaces keep the same privacy defaults:
 
 - redacted by default
 - alias only when explicitly requested
@@ -25,3 +25,10 @@ Phase 4 aggregate, workspace, agent, and explain commands keep the same privacy 
 Explain commands expose canonical IDs, token totals, lineage status, requested and
 observed models, stored raw artifact relpaths, and priced versus unpriced coverage
 without defaulting to absolute workspace paths.
+
+Phase 5 delivery artifacts keep the same default:
+
+- saved report JSON includes the selected `redaction_mode`
+- rendered HTML reflects the selected redaction mode from the source workspace report
+- render sidecars record the chosen redaction mode and source-report hash
+- render sidecars use report names and hashes rather than absolute source-report paths by default

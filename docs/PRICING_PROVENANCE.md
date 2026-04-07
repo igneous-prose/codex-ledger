@@ -55,6 +55,17 @@ Each row carries:
 observed model, requested model, matched rule when present, token counts used for billing,
 and the explicit reason when pricing is unsupported or unknown.
 
+## Report and Render Provenance
+
+Phase 4 and Phase 5 keep pricing provenance visible at delivery time:
+
+- reports record selected rule set, selection mode, coverage status, priced token totals,
+  unpriced token totals, warnings, and the reference USD estimate when available
+- explain payloads trace priced and unpriced totals back to sessions, raw artifacts,
+  models, workspaces, and individual events
+- render sidecars carry the source-report hash, report schema version, report generator
+  version, selected redaction mode, selected pricing rule set, and pricing coverage summary
+
 ## Determinism
 
 - Pricing rules are loaded from repo-tracked JSON files only.
