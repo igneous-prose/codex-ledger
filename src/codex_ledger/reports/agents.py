@@ -84,11 +84,7 @@ def format_agent_explain_table(payload: dict[str, Any]) -> str:
         f"Kind: {run['agent_kind']}",
         f"Name: {run['agent_name'] or 'unknown'}",
         f"Role: {run['agent_role'] or 'unknown'}",
-        (
-            "Lineage: "
-            f"{run['lineage_status']} "
-            f"({run['lineage_confidence']})"
-        ),
+        (f"Lineage: {run['lineage_status']} ({run['lineage_confidence']})"),
         f"Requested model: {run['requested_model_id'] or 'unknown'}",
         f"Observed model: {run['observed_model_id'] or 'unknown'}",
         f"Events: {summary['event_count']}",
@@ -353,9 +349,7 @@ def _build_agent_explain_payload(
             "total_tokens": total_tokens,
             "observed_model_ids": sorted(observed_model_ids),
         },
-        "workspace_attribution": [
-            workspace_items[key] for key in sorted(workspace_items)
-        ],
+        "workspace_attribution": [workspace_items[key] for key in sorted(workspace_items)],
     }
     return payload
 
@@ -556,10 +550,7 @@ def _count_mix(rows: list[dict[str, str | None]], key: str) -> list[dict[str, An
     counts: dict[str, int] = defaultdict(int)
     for row in rows:
         counts[str(row[key])] += 1
-    return [
-        {"label": label, "count": counts[label]}
-        for label in sorted(counts)
-    ]
+    return [{"label": label, "count": counts[label]} for label in sorted(counts)]
 
 
 def _workspace_proxy(values: dict[str, str]) -> Any:
