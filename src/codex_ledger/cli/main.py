@@ -70,6 +70,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Override the archive home directory for this run.",
     )
+    sync_parser.add_argument(
+        "--show-full-paths",
+        action="store_true",
+        help="Print canonical absolute local paths in text output.",
+    )
     sync_parser.set_defaults(handler=run_sync)
 
     import_parser = subparsers.add_parser(
@@ -88,6 +93,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--archive-home",
         type=Path,
         help="Override the archive home directory for this run.",
+    )
+    import_codex_parser.add_argument(
+        "--show-full-paths",
+        action="store_true",
+        help="Print canonical absolute local paths in text output.",
     )
     import_codex_parser.set_defaults(handler=run_import_codex_json)
 
@@ -500,6 +510,11 @@ def build_parser() -> argparse.ArgumentParser:
         dest="as_json",
         help="Emit machine-readable JSON.",
     )
+    doctor_parser.add_argument(
+        "--show-full-paths",
+        action="store_true",
+        help="Print canonical absolute local paths in text output.",
+    )
     doctor_parser.set_defaults(handler=run_doctor)
 
     migrate_parser = subparsers.add_parser(
@@ -515,6 +530,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--archive-home",
         type=Path,
         help="Override the archive home directory for this run.",
+    )
+    migrate_parser.add_argument(
+        "--show-full-paths",
+        action="store_true",
+        help="Print canonical absolute local paths in text output.",
     )
     migrate_parser.set_defaults(handler=run_migrate)
 
@@ -534,7 +554,10 @@ def run_sync(args: argparse.Namespace) -> int:
     print(f"Skipped files: {summary.skipped_file_count}")
     print(f"Failed files: {summary.failed_file_count}")
     for outcome in outcomes:
-        print(f"{outcome.status}: {outcome.source_path}")
+        print(
+            f"{outcome.status}: "
+            f"{_display_local_path(outcome.source_path, show_full_paths=args.show_full_paths)}"
+        )
     return 0 if summary.failed_file_count == 0 else 1
 
 
@@ -546,7 +569,10 @@ def run_import_codex_json(args: argparse.Namespace) -> int:
     )
     print(f"Batch: {summary.batch_id}")
     for outcome in outcomes:
-        print(f"{outcome.status}: {outcome.source_path}")
+        print(
+            f"{outcome.status}: "
+            f"{_display_local_path(outcome.source_path, show_full_paths=args.show_full_paths)}"
+        )
         if outcome.detail:
             print(f"detail: {outcome.detail}")
     return 0 if summary.failed_file_count == 0 else 1
@@ -584,15 +610,25 @@ def run_doctor(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
-    print(f"Archive home: {payload['archive_home']}")
-    print(f"Database path: {payload['database_path']}")
+    show_full_paths = bool(args.show_full_paths)
+    archive_home = Path(str(payload["archive_home"]))
+    print(f"Archive home: {_display_local_path(archive_home, show_full_paths=show_full_paths)}")
+    database_label = _display_local_path(
+        payload["database_path"],
+        show_full_paths=show_full_paths,
+        anchor=archive_home,
+    )
+    print(f"Database path: {database_label}")
     print(f"History persistence: {payload['history_persistence_status']}")
     for name, path in payload["expected_layout"].items():
-        print(f"{name}: {path}")
+        print(
+            f"{name}: "
+            f"{_display_local_path(path, show_full_paths=show_full_paths, anchor=archive_home)}"
+        )
     for source in payload["source_roots"]:
         print(
             "source: "
-            f"{source['path']} "
+            f"{_display_local_path(source['path'], show_full_paths=show_full_paths)} "
             f"(exists={source['exists']}, jsonl_count={source['jsonl_count']})"
         )
     applied = ", ".join(payload["migration_status"]["applied"]) or "none"
@@ -780,18 +816,25 @@ def run_migrate(args: argparse.Namespace) -> int:
     if args.database is not None:
         database_path = args.database.expanduser().resolve(strict=False)
         database_path.parent.mkdir(parents=True, exist_ok=True)
+        display_anchor: Path | None = None
     else:
         archive_home = _resolve_archive_home_argument(args.archive_home)
         ensure_archive_home_layout(archive_home)
         database_path = default_database_path(archive_home)
+        display_anchor = archive_home
 
     applied = apply_migrations(database_path)
+    database_label = _display_local_path(
+        database_path,
+        show_full_paths=bool(args.show_full_paths),
+        anchor=display_anchor,
+    )
     if applied:
-        print(f"Applied migrations to {database_path}:")
+        print(f"Applied migrations to {database_label}:")
         for name in applied:
             print(f"- {name}")
     else:
-        print(f"No pending migrations for {database_path}")
+        print(f"No pending migrations for {database_label}")
     return 0
 
 
@@ -799,6 +842,36 @@ def _resolve_archive_home_argument(archive_home: Path | None) -> Path:
     if archive_home is not None:
         return archive_home.expanduser().resolve(strict=False)
     return resolve_archive_home()
+
+
+def _display_local_path(
+    value: Path | str,
+    *,
+    show_full_paths: bool,
+    anchor: Path | None = None,
+) -> str:
+    path = value if isinstance(value, Path) else Path(value)
+    resolved = path.expanduser().resolve(strict=False)
+    if show_full_paths:
+        return str(resolved)
+    if anchor is not None:
+        anchored = anchor.expanduser().resolve(strict=False)
+        try:
+            relative = resolved.relative_to(anchored)
+            return "." if str(relative) == "" else str(relative)
+        except ValueError:
+            pass
+    cwd = Path.cwd().resolve(strict=False)
+    try:
+        return str(resolved.relative_to(cwd))
+    except ValueError:
+        pass
+    home = Path.home().resolve(strict=False)
+    try:
+        relative = resolved.relative_to(home)
+        return "~" if str(relative) == "" else f"~/{relative}"
+    except ValueError:
+        return resolved.name
 
 
 def _parse_date(value: str) -> date:

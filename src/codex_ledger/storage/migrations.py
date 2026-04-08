@@ -46,8 +46,19 @@ def migration_files() -> list[tuple[str, Traversable]]:
     return sorted((item.name, item) for item in files)
 
 
+def migration_catalog() -> list[tuple[str, str, Traversable]]:
+    return [
+        (filename.split("_", maxsplit=1)[0], filename, file_ref)
+        for filename, file_ref in migration_files()
+    ]
+
+
 def migration_filenames() -> list[str]:
-    return [filename for filename, _ in migration_files()]
+    return [filename for _, filename, _ in migration_catalog()]
+
+
+def migration_filename_by_version() -> dict[str, str]:
+    return {version: filename for version, filename, _ in migration_catalog()}
 
 
 def apply_migrations(database_path: Path) -> list[str]:
@@ -56,8 +67,7 @@ def apply_migrations(database_path: Path) -> list[str]:
 
     with connect_database(database_path) as connection:
         existing = applied_versions(connection)
-        for filename, file_ref in migration_files():
-            version = filename.split("_", maxsplit=1)[0]
+        for version, filename, file_ref in migration_catalog():
             if version in existing:
                 continue
 

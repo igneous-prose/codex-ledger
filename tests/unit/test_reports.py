@@ -139,7 +139,7 @@ def test_workspace_report_supports_alias_and_full_modes(tmp_path: Path) -> None:
     assert full_payload["data"]["workspaces"][0]["workspace_label"] == str(workspace_root)
 
 
-def test_agent_report_reuses_phase21_observability_and_adds_pricing(tmp_path: Path) -> None:
+def test_agent_report_reuses_phase2_1_observability_and_adds_pricing(tmp_path: Path) -> None:
     archive_home = _import_fixture_batch(
         tmp_path / "archive",
         ("lineage_parent_rollout.jsonl", "lineage_child_rollout.jsonl"),
