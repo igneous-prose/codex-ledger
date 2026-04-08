@@ -340,13 +340,14 @@ def summarize_doctor_status(archive_home: Path) -> dict[str, Any]:
     elif all(item["jsonl_count"] == 0 for item in source_roots):
         history_status = "unknown"
 
-    from codex_ledger.storage.migrations import migration_filenames
+    from codex_ledger.storage.migrations import migration_catalog, migration_filename_by_version
 
     raw_file_count = 0
     session_count = 0
     event_count = 0
     failed_raw_count = 0
     applied_migrations: list[str] = []
+    applied_versions: list[str] = []
 
     if database_path.exists():
         with connect_database(database_path) as connection:
@@ -357,11 +358,25 @@ def summarize_doctor_status(archive_home: Path) -> dict[str, Any]:
                 connection,
                 "SELECT COUNT(*) FROM raw_files WHERE parse_status <> 'parsed'",
             )
-            applied_migrations = _column_values(
-                connection, "SELECT name FROM schema_migrations ORDER BY version"
+            applied_versions = _column_values(
+                connection, "SELECT version FROM schema_migrations ORDER BY version"
             )
+            stored_names = {
+                version: name
+                for version, name in connection.execute(
+                    "SELECT version, name FROM schema_migrations ORDER BY version"
+                ).fetchall()
+            }
 
-    pending = [name for name in migration_filenames() if name not in applied_migrations]
+            current_names = migration_filename_by_version()
+            applied_migrations = [
+                current_names.get(version, stored_names.get(version, version))
+                for version in applied_versions
+            ]
+
+    pending = [
+        filename for version, filename, _ in migration_catalog() if version not in applied_versions
+    ]
 
     return {
         "archive_home": str(archive_home),

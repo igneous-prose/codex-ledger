@@ -13,8 +13,11 @@ The implemented workspace label modes are:
 - `alias`: uses a locally stored alias when one exists, otherwise falls back to the redacted label
 - `full`: returns the resolved root path and is opt-in only
 
-Absolute paths remain ledger-internal by default. The current implementation does not
-emit them in default CLI output, fixtures, or docs examples.
+Absolute paths remain ledger-internal by default for outward-facing artifacts.
+Default text output for `sync`, `import codex-json`, `doctor`, and `migrate` avoids
+absolute local paths unless you opt in with `--show-full-paths`. JSON diagnostics can
+still carry canonical local paths when machine-readable output is the point of the
+command.
 
 Aggregate, workspace, agent, explain, and render surfaces keep the same privacy defaults:
 

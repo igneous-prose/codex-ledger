@@ -116,6 +116,8 @@ codex-ledger reconcile reference --input ./reference-summary.json
 The ledger keeps raw provenance locally, including original source paths in SQLite.
 Default outward-facing report, explain, and render output stays redacted unless you
 explicitly request `--redaction-mode alias` or `--redaction-mode full`.
+Default text output for `sync`, `import codex-json`, `doctor`, and `migrate` also
+avoids absolute local paths unless you opt in with `--show-full-paths`.
 
 Rendered PNG and HTML artifacts are traced by sidecar JSON manifests that record report
 schema version, generator version, pricing rule-set selection, redaction mode, and

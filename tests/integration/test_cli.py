@@ -42,10 +42,12 @@ def test_migrate_command_creates_database(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert database_path.exists()
+    assert str(database_path.resolve()) not in result.stdout
+    assert "Applied migrations to custom.sqlite3:" in result.stdout
     assert "0001_initial.sql" in result.stdout
     assert "0002_phase1_ledger.sql" in result.stdout
     assert "0003_phase2_workspace_lineage.sql" in result.stdout
-    assert "0004_phase21_agent_observability.sql" in result.stdout
+    assert "0004_phase2.1_agent_observability.sql" in result.stdout
     assert "0005_phase3_pricing.sql" in result.stdout
 
 
@@ -74,6 +76,38 @@ def test_import_codex_json_command_imports_fixture(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert "imported:" in result.stdout
+    assert fixture.name in result.stdout
+    assert str(fixture) not in result.stdout
+
+
+def test_import_codex_json_command_show_full_paths_prints_absolute_source_path(
+    tmp_path: Path,
+) -> None:
+    archive_home = tmp_path / "archive"
+    fixture = Path(__file__).resolve().parents[1] / "fixtures" / "codex" / "imported_report.json"
+    env = {**os.environ, "PYTHONPATH": "src"}
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "import",
+            "codex-json",
+            "--input",
+            str(fixture),
+            "--archive-home",
+            str(archive_home),
+            "--show-full-paths",
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0
+    assert str(fixture) in result.stdout
 
 
 def test_sync_command_imports_local_rollouts_from_home(tmp_path: Path) -> None:
@@ -103,6 +137,8 @@ def test_sync_command_imports_local_rollouts_from_home(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert "Imported files: 1" in result.stdout
+    assert "~/.codex/sessions/2026/04/01/sample_rollout.jsonl" in result.stdout
+    assert str(target.resolve()) not in result.stdout
 
 
 def test_doctor_reports_persistence_source_dirs_database_and_migrations(tmp_path: Path) -> None:
@@ -134,7 +170,7 @@ def test_doctor_reports_persistence_source_dirs_database_and_migrations(tmp_path
         "0001_initial.sql",
         "0002_phase1_ledger.sql",
         "0003_phase2_workspace_lineage.sql",
-        "0004_phase21_agent_observability.sql",
+        "0004_phase2.1_agent_observability.sql",
         "0005_phase3_pricing.sql",
     ]
     assert payload["source_roots"] == [
@@ -149,6 +185,126 @@ def test_doctor_reports_persistence_source_dirs_database_and_migrations(tmp_path
             "path": str(home / ".codex" / "archived_sessions"),
         },
     ]
+
+
+def test_doctor_reports_current_migration_names_for_legacy_stored_filename(
+    tmp_path: Path,
+) -> None:
+    archive_home = tmp_path / "archive"
+    env = {**os.environ, "PYTHONPATH": "src"}
+
+    migrate_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "migrate",
+            "--archive-home",
+            str(archive_home),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env=env,
+    )
+    assert migrate_result.returncode == 0
+
+    database_path = archive_home / "ledger" / "codex-ledger.sqlite3"
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute(
+            """
+            UPDATE schema_migrations
+            SET name = '0004_phase21_agent_observability.sql'
+            WHERE version = '0004'
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "doctor",
+            "--archive-home",
+            str(archive_home),
+            "--json",
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["migration_status"]["applied"] == [
+        "0001_initial.sql",
+        "0002_phase1_ledger.sql",
+        "0003_phase2_workspace_lineage.sql",
+        "0004_phase2.1_agent_observability.sql",
+        "0005_phase3_pricing.sql",
+    ]
+    assert payload["migration_status"]["pending"] == []
+
+
+def test_doctor_text_output_redacts_paths_by_default(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    archive_home = tmp_path / "archive"
+    env = {**os.environ, "HOME": str(home), "PYTHONPATH": "src"}
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "doctor",
+            "--archive-home",
+            str(archive_home),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0
+    assert str(archive_home.resolve()) not in result.stdout
+    assert str((archive_home / "ledger" / "codex-ledger.sqlite3").resolve()) not in result.stdout
+    assert str((home / ".codex" / "sessions").resolve()) not in result.stdout
+    assert "Database path: ledger/codex-ledger.sqlite3" in result.stdout
+    assert "source: ~/.codex/sessions (exists=False, jsonl_count=0)" in result.stdout
+    assert "source: ~/.codex/archived_sessions (exists=False, jsonl_count=0)" in result.stdout
+
+
+def test_doctor_text_output_show_full_paths_prints_absolute_paths(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    archive_home = tmp_path / "archive"
+    env = {**os.environ, "HOME": str(home), "PYTHONPATH": "src"}
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "doctor",
+            "--archive-home",
+            str(archive_home),
+            "--show-full-paths",
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0
+    assert str(archive_home.resolve()) in result.stdout
+    assert str((archive_home / "ledger" / "codex-ledger.sqlite3").resolve()) in result.stdout
+    assert str((home / ".codex" / "sessions").resolve()) in result.stdout
 
 
 def test_report_agents_command_emits_json_diagnostics(tmp_path: Path) -> None:
