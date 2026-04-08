@@ -581,8 +581,7 @@ def _file_too_large(
         line_count=0,
         parse_status="file_too_large",
         parse_error=(
-            "source file exceeds configured limit "
-            f"({size_bytes} bytes > {max_bytes} bytes)"
+            f"source file exceeds configured limit ({size_bytes} bytes > {max_bytes} bytes)"
         ),
         session=None,
         agent_runs=(),
