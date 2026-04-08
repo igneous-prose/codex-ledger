@@ -61,6 +61,17 @@ def test_report_schema_validation_rejects_invalid_saved_json(tmp_path: Path) -> 
         load_report_file(report_path)
 
 
+def test_report_schema_validation_rejects_oversized_report_json(
+    tmp_path: Path, monkeypatch
+) -> None:
+    report_path = tmp_path / "large-report.json"
+    report_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("codex_ledger.reports.schema.MAX_REPORT_FILE_BYTES", 1)
+
+    with pytest.raises(ReportValidationError, match="exceeds configured limit"):
+        load_report_file(report_path)
+
+
 def test_heatmap_render_is_deterministic_and_tracks_provenance(tmp_path: Path) -> None:
     archive_home = _import_fixture_batch(tmp_path / "archive", ("sample_rollout.jsonl",))
     recalculate_event_costs(archive_home=archive_home, rule_set_id=RULE_SET_ID)

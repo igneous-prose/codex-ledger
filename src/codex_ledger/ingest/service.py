@@ -14,7 +14,7 @@ from codex_ledger.domain.records import (
 )
 from codex_ledger.ingest.discovery import discover_local_rollout_files
 from codex_ledger.paths import archive_home_layout, ensure_archive_home_layout
-from codex_ledger.providers.codex.parser import parse_imported_json_report, parse_local_rollout_file
+from codex_ledger.providers.codex import parser as codex_parser
 from codex_ledger.storage.archive import archive_raw_file
 from codex_ledger.storage.migrations import (
     apply_migrations,
@@ -187,6 +187,21 @@ def _import_candidate(
             stored_relpath=None,
             event_count=0,
         )
+    size_bytes = source_path.stat().st_size
+    if size_bytes > codex_parser.MAX_IMPORT_FILE_BYTES:
+        return ImportOutcome(
+            source_path=source_path,
+            source_kind=candidate.source_kind,
+            status="file_too_large",
+            detail=(
+                "source file exceeds configured limit "
+                f"({size_bytes} bytes > {codex_parser.MAX_IMPORT_FILE_BYTES} bytes)"
+            ),
+            raw_file_id=None,
+            content_hash=None,
+            stored_relpath=None,
+            event_count=0,
+        )
 
     content_hash = sha256_file(source_path)
     existing_raw = fetch_raw_file_by_hash(
@@ -310,9 +325,9 @@ def _import_candidate(
 
 def _parse_candidate(path: Path, source_kind: SourceKind) -> ParsedFile:
     if source_kind == "local_rollout_file":
-        return parse_local_rollout_file(path)
+        return codex_parser.parse_local_rollout_file(path)
     if source_kind == "imported_json_report":
-        return parse_imported_json_report(path)
+        return codex_parser.parse_imported_json_report(path)
     raise ValueError(f"Unsupported source kind: {source_kind}")
 
 

@@ -19,6 +19,7 @@ from codex_ledger.reports.common import (
     summarize_token_totals,
 )
 from codex_ledger.storage.migrations import connect_database, default_database_path
+from codex_ledger.utils.terminal import safe_terminal_field
 
 DIAGNOSTIC_SCHEMA_VERSION = "phase2.1-agent-diagnostics-v1"
 
@@ -234,10 +235,14 @@ def explain_agent_run(
 
 
 def format_agent_report_table(payload: dict[str, Any]) -> str:
+    safe = safe_terminal_field
     summary = payload["summary"]
     pricing = payload["pricing"]
     lines = [
-        f"Agent diagnostics: {payload['filters']['period']} as of {payload['filters']['as_of']}",
+        (
+            f"Agent diagnostics: {safe(payload['filters']['period'])} "
+            f"as of {safe(payload['filters']['as_of'])}"
+        ),
         (
             "Root usage: "
             f"{summary['root_usage']['event_count']} events, "
@@ -258,15 +263,15 @@ def format_agent_report_table(payload: dict[str, Any]) -> str:
     if pricing["included"]:
         lines.append(
             "Pricing: "
-            f"{pricing['selected_rule_set_id']} "
-            f"({pricing['coverage_status']}, "
-            f"{pricing['reference_usd_estimate']} {pricing['currency']})"
+            f"{safe(pricing['selected_rule_set_id'])} "
+            f"({safe(pricing['coverage_status'])}, "
+            f"{pricing['reference_usd_estimate']} {safe(pricing['currency'])})"
         )
     else:
-        lines.append(f"Pricing: omitted ({pricing['warnings'][0]})")
+        lines.append(f"Pricing: omitted ({safe(pricing['warnings'][0])})")
     lines.append("Top heavy hitters:")
     for item in payload["top_heavy_hitters"][:5]:
-        label = item["agent_name"] or item["agent_role"] or item["agent_run_key"]
+        label = safe(item["agent_name"] or item["agent_role"] or item["agent_run_key"])
         suffix = ""
         if pricing["included"]:
             suffix = f", usd={item['reference_usd_estimate']}"
@@ -277,26 +282,27 @@ def format_agent_report_table(payload: dict[str, Any]) -> str:
 
 
 def format_agent_explain_table(payload: dict[str, Any]) -> str:
+    safe = safe_terminal_field
     run = payload["agent_run"]
     summary = payload["event_summary"]
     pricing = payload["pricing"]
     lines = [
-        f"Agent run: {run['agent_run_key']}",
-        f"Kind: {run['agent_kind']}",
-        f"Name: {run['agent_name'] or 'unknown'}",
-        f"Role: {run['agent_role'] or 'unknown'}",
-        (f"Lineage: {run['lineage_status']} ({run['lineage_confidence']})"),
-        f"Requested model: {run['requested_model_id'] or 'unknown'}",
-        f"Observed model: {run['observed_model_id'] or 'unknown'}",
+        f"Agent run: {safe(run['agent_run_key'])}",
+        f"Kind: {safe(run['agent_kind'])}",
+        f"Name: {safe(run['agent_name'] or 'unknown')}",
+        f"Role: {safe(run['agent_role'] or 'unknown')}",
+        (f"Lineage: {safe(run['lineage_status'])} ({safe(run['lineage_confidence'])})"),
+        f"Requested model: {safe(run['requested_model_id'] or 'unknown')}",
+        f"Observed model: {safe(run['observed_model_id'] or 'unknown')}",
         f"Events: {summary['event_count']}",
         f"Tokens: {summary['total_tokens']}",
-        f"Stored raw artifact: {payload['provenance']['stored_relpath']}",
+        f"Stored raw artifact: {safe(payload['provenance']['stored_relpath'])}",
     ]
     if pricing["included"]:
         lines.append(
             "Pricing: "
-            f"{pricing['selected_rule_set_id']} "
-            f"({summary['reference_usd_estimate']} {pricing['currency']})"
+            f"{safe(pricing['selected_rule_set_id'])} "
+            f"({summary['reference_usd_estimate']} {safe(pricing['currency'])})"
         )
     return "\n".join(lines)
 

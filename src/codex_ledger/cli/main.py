@@ -45,6 +45,7 @@ from codex_ledger.reports.workspaces import (
     format_workspace_report_table,
 )
 from codex_ledger.storage.migrations import apply_migrations, default_database_path
+from codex_ledger.utils.terminal import safe_terminal_field
 from codex_ledger.verify.service import format_verify_table, verify_ledger, verify_reports
 
 
@@ -574,7 +575,7 @@ def run_import_codex_json(args: argparse.Namespace) -> int:
             f"{_display_local_path(outcome.source_path, show_full_paths=args.show_full_paths)}"
         )
         if outcome.detail:
-            print(f"detail: {outcome.detail}")
+            print(f"detail: {safe_terminal_field(outcome.detail)}")
     return 0 if summary.failed_file_count == 0 else 1
 
 
@@ -853,25 +854,25 @@ def _display_local_path(
     path = value if isinstance(value, Path) else Path(value)
     resolved = path.expanduser().resolve(strict=False)
     if show_full_paths:
-        return str(resolved)
+        return safe_terminal_field(resolved)
     if anchor is not None:
         anchored = anchor.expanduser().resolve(strict=False)
         try:
             relative = resolved.relative_to(anchored)
-            return "." if str(relative) == "" else str(relative)
+            return "." if str(relative) == "" else safe_terminal_field(relative)
         except ValueError:
             pass
     cwd = Path.cwd().resolve(strict=False)
     try:
-        return str(resolved.relative_to(cwd))
+        return safe_terminal_field(resolved.relative_to(cwd))
     except ValueError:
         pass
     home = Path.home().resolve(strict=False)
     try:
         relative = resolved.relative_to(home)
-        return "~" if str(relative) == "" else f"~/{relative}"
+        return "~" if str(relative) == "" else safe_terminal_field(f"~/{relative}")
     except ValueError:
-        return resolved.name
+        return safe_terminal_field(resolved.name)
 
 
 def _parse_date(value: str) -> date:
@@ -895,5 +896,5 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         return int(handler(args))
     except (ReportValidationError, ValueError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        print(f"Error: {safe_terminal_field(exc)}", file=sys.stderr)
         return 1

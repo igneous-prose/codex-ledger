@@ -10,6 +10,7 @@ from codex_ledger.reports.aggregate import build_aggregate_report
 from codex_ledger.reports.schema import ReportValidationError, validate_report_payload
 from codex_ledger.reports.workspaces import build_workspace_report
 from codex_ledger.storage.migrations import connect_database, default_database_path
+from codex_ledger.utils.terminal import safe_terminal_field
 
 
 def verify_ledger(archive_home: Path) -> dict[str, Any]:
@@ -125,12 +126,13 @@ def verify_reports(
 
 
 def format_verify_table(payload: dict[str, Any], *, label: str) -> str:
+    safe = safe_terminal_field
     status = "ok" if payload["ok"] else "failed"
-    lines = [f"Verify {label}: {status}"]
+    lines = [f"Verify {safe(label)}: {status}"]
     for check in payload["checks"]:
-        line = f"- {check['name']}: {'ok' if check['ok'] else 'failed'}"
+        line = f"- {safe(check['name'])}: {'ok' if check['ok'] else 'failed'}"
         if not check["ok"] and check["detail"]:
-            line += f" ({check['detail']})"
+            line += f" ({safe(check['detail'])})"
         lines.append(line)
     return "\n".join(lines)
 

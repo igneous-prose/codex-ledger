@@ -20,8 +20,18 @@ from codex_ledger.utils.hashing import sha256_text
 from codex_ledger.utils.json import canonical_json
 from codex_ledger.utils.time import normalize_timestamp
 
+MAX_IMPORT_FILE_BYTES = 64 * 1024 * 1024
+
 
 def parse_local_rollout_file(path: Path) -> ParsedFile:
+    size_bytes = path.stat().st_size
+    if size_bytes > MAX_IMPORT_FILE_BYTES:
+        return _file_too_large(
+            path=path,
+            source_kind="local_rollout_file",
+            size_bytes=size_bytes,
+            max_bytes=MAX_IMPORT_FILE_BYTES,
+        )
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except UnicodeDecodeError as exc:
@@ -71,6 +81,14 @@ def parse_local_rollout_file(path: Path) -> ParsedFile:
 
 
 def parse_imported_json_report(path: Path) -> ParsedFile:
+    size_bytes = path.stat().st_size
+    if size_bytes > MAX_IMPORT_FILE_BYTES:
+        return _file_too_large(
+            path=path,
+            source_kind="imported_json_report",
+            size_bytes=size_bytes,
+            max_bytes=MAX_IMPORT_FILE_BYTES,
+        )
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except UnicodeDecodeError as exc:
@@ -546,6 +564,32 @@ def _extract_usage(payload: dict[str, Any]) -> dict[str, int | None]:
         "reasoning_output_tokens": None,
         "total_tokens": None,
     }
+
+
+def _file_too_large(
+    *,
+    path: Path,
+    source_kind: SourceKind,
+    size_bytes: int,
+    max_bytes: int,
+) -> ParsedFile:
+    return ParsedFile(
+        provider="codex",
+        host="unknown",
+        source_kind=source_kind,
+        file_extension=path.suffix,
+        line_count=0,
+        parse_status="file_too_large",
+        parse_error=(
+            "source file exceeds configured limit "
+            f"({size_bytes} bytes > {max_bytes} bytes)"
+        ),
+        session=None,
+        agent_runs=(),
+        events=(),
+        workspaces=(),
+        model_ids=(),
+    )
 
 
 def _clean_str(value: Any) -> str | None:

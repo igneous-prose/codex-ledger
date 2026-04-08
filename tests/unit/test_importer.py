@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from codex_ledger.domain.records import ImportCandidate, WorkspaceRecord
 from codex_ledger.ingest.service import run_import_batch
 from codex_ledger.normalize.privacy import render_workspace_label
@@ -221,6 +223,44 @@ def test_raw_file_hashes_are_stable(tmp_path: Path) -> None:
     assert first_hash == sha256_file(fixture)
     assert second_hash == first_hash
     assert second_relpath == stored_relpath
+
+
+def test_archive_raw_file_rejects_symlink_target(tmp_path: Path) -> None:
+    raw_root = tmp_path / "raw"
+    fixture = fixture_path("sample_rollout.jsonl")
+    content_hash = sha256_file(fixture)
+    stored_relpath = Path(f"codex/local_rollout_file/{content_hash[:2]}/{content_hash}.jsonl")
+    target_path = raw_root / stored_relpath
+    victim_path = tmp_path / "victim.txt"
+    victim_path.write_text("do not overwrite\n", encoding="utf-8")
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.symlink_to(victim_path)
+
+    with pytest.raises(ValueError, match="symlink"):
+        archive_raw_file(raw_root, fixture, "codex", "local_rollout_file")
+
+    assert victim_path.read_text(encoding="utf-8") == "do not overwrite\n"
+
+
+def test_import_rejects_oversized_local_rollout_file(tmp_path: Path, monkeypatch) -> None:
+    archive_home = tmp_path / "archive"
+    oversized = tmp_path / "oversized.jsonl"
+    oversized.write_text('{"type":"session_meta","payload":{"id":"s"}}\n', encoding="utf-8")
+    monkeypatch.setattr("codex_ledger.providers.codex.parser.MAX_IMPORT_FILE_BYTES", 8)
+    monkeypatch.setattr("codex_ledger.storage.archive.MAX_ARCHIVE_COPY_BYTES", 8)
+
+    summary, outcomes = run_import_batch(
+        archive_home=archive_home,
+        candidates=(ImportCandidate(oversized, "local_rollout_file"),),
+        provider="codex",
+        host="standalone_cli",
+        source_kind="local_rollout_file",
+        full_backfill=False,
+    )
+
+    assert summary.failed_file_count == 1
+    assert outcomes[0].status == "file_too_large"
+    assert "exceeds configured limit" in str(outcomes[0].detail)
 
 
 def test_path_like_model_ids_remain_models_not_workspaces(tmp_path: Path) -> None:
