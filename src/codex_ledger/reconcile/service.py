@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from codex_ledger.reports.aggregate import build_aggregate_report
+from codex_ledger.utils.terminal import safe_terminal_field
 
 
 def reconcile_reference(
@@ -59,13 +60,14 @@ def reconcile_reference(
 
 
 def format_reconcile_table(payload: dict[str, Any]) -> str:
+    safe = safe_terminal_field
     lines = [
         f"Reconcile reference: {'ok' if payload['ok'] else 'failed'}",
-        f"Input: {payload['reference_input']}",
+        f"Input: {safe(payload['reference_input'])}",
         (
             "Derived filters: "
-            f"{payload['derived_filters']['period']} "
-            f"as of {payload['derived_filters']['as_of']}"
+            f"{safe(payload['derived_filters']['period'])} "
+            f"as of {safe(payload['derived_filters']['as_of'])}"
         ),
     ]
     if not payload["diffs"]:
@@ -73,7 +75,8 @@ def format_reconcile_table(payload: dict[str, Any]) -> str:
     else:
         for diff in payload["diffs"]:
             lines.append(
-                f"- {diff['field']}: reference={diff['reference']} current={diff['current']}"
+                f"- {safe(diff['field'])}: "
+                f"reference={safe(diff['reference'])} current={safe(diff['current'])}"
             )
     return "\n".join(lines)
 

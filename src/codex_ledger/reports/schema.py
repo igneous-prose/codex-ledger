@@ -10,6 +10,9 @@ class ReportValidationError(ValueError):
     """Raised when a report payload or file does not match its schema."""
 
 
+MAX_REPORT_FILE_BYTES = 16 * 1024 * 1024
+
+
 SCHEMA_FILENAME_BY_VERSION = {
     "phase4-aggregate-report-v1": "aggregate-report-v1.schema.json",
     "phase4-workspace-report-v1": "workspace-report-v1.schema.json",
@@ -24,6 +27,12 @@ def validate_report_payload(payload: dict[str, Any]) -> None:
 
 
 def load_report_file(report_path: Path) -> dict[str, Any]:
+    size_bytes = report_path.stat().st_size
+    if size_bytes > MAX_REPORT_FILE_BYTES:
+        raise ReportValidationError(
+            "report file exceeds configured limit "
+            f"({size_bytes} bytes > {MAX_REPORT_FILE_BYTES} bytes)"
+        )
     try:
         payload = json.loads(report_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:

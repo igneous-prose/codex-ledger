@@ -30,6 +30,85 @@ def test_module_help_is_clean() -> None:
     assert "migrate" in result.stdout
 
 
+def test_workspace_report_table_escapes_terminal_control_sequences(tmp_path: Path) -> None:
+    archive_home = tmp_path / "archive"
+    env = {**os.environ, "PYTHONPATH": "src"}
+    fixture = Path(__file__).resolve().parents[1] / "fixtures" / "codex" / "imported_report.json"
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "import",
+            "codex-json",
+            "--input",
+            str(fixture),
+            "--archive-home",
+            str(archive_home),
+        ],
+        capture_output=True,
+        check=True,
+        text=True,
+        env=env,
+    )
+
+    database_path = archive_home / "ledger" / "codex-ledger.sqlite3"
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute(
+            """
+            UPDATE workspaces
+            SET redacted_display_label = ?
+            """,
+            ("workspace\x1b[31mred",),
+        )
+        connection.execute(
+            """
+            UPDATE models
+            SET model_id = ?
+            WHERE model_id = 'gpt-5.4'
+            """,
+            ("gpt-5.4\x1b[2J",),
+        )
+        connection.execute(
+            """
+            UPDATE usage_events
+            SET model_id = ?
+            WHERE model_id = 'gpt-5.4'
+            """,
+            ("gpt-5.4\x1b[2J",),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "report",
+            "workspace",
+            "--archive-home",
+            str(archive_home),
+            "--period",
+            "month",
+            "--as-of",
+            "2026-04-30",
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0
+    assert "\x1b" not in result.stdout
+    assert "\\x1b[31m" in result.stdout or "\\u001b" in result.stdout
+    assert "\\x1b[2J" in result.stdout or "\\u001b" in result.stdout
+
+
 def test_migrate_command_creates_database(tmp_path: Path) -> None:
     database_path = tmp_path / "custom.sqlite3"
 

@@ -17,6 +17,7 @@ from codex_ledger.reports.common import (
     resolve_pricing_context,
 )
 from codex_ledger.storage.migrations import connect_database, default_database_path
+from codex_ledger.utils.terminal import safe_terminal_field
 
 EXPLAIN_REPORT_SCHEMA_VERSION = "phase4-explain-report-v1"
 
@@ -100,10 +101,11 @@ def explain_model(
 
 
 def format_explain_table(payload: dict[str, Any]) -> str:
+    safe = safe_terminal_field
     summary = payload["summary"]
     pricing = payload["pricing"]
     lines = [
-        f"Explain: {payload['filters']['kind']}",
+        f"Explain: {safe(payload['filters']['kind'])}",
         f"Events: {summary['event_count']}",
         f"Tokens: {summary['total_tokens']}",
         f"Sessions: {summary['session_count']}",
@@ -112,16 +114,16 @@ def format_explain_table(payload: dict[str, Any]) -> str:
     if pricing["included"]:
         lines.append(
             "Pricing: "
-            f"{pricing['selected_rule_set_id']} "
-            f"({pricing['coverage_status']}, "
-            f"{pricing['reference_usd_estimate']} {pricing['currency']})"
+            f"{safe(pricing['selected_rule_set_id'])} "
+            f"({safe(pricing['coverage_status'])}, "
+            f"{pricing['reference_usd_estimate']} {safe(pricing['currency'])})"
         )
     else:
-        lines.append(f"Pricing: omitted ({pricing['warnings'][0]})")
+        lines.append(f"Pricing: omitted ({safe(pricing['warnings'][0])})")
     lines.append("Source artifacts:")
     for item in payload["source_artifacts"][:5]:
         lines.append(
-            f"- {item['stored_relpath']}: "
+            f"- {safe(item['stored_relpath'])}: "
             f"{item['event_count']} events, {item['total_tokens']} tokens"
         )
     return "\n".join(lines)

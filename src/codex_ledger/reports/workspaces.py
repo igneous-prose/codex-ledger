@@ -17,6 +17,7 @@ from codex_ledger.reports.common import (
     resolve_pricing_context,
 )
 from codex_ledger.storage.migrations import connect_database, default_database_path
+from codex_ledger.utils.terminal import safe_terminal_field
 
 WORKSPACE_REPORT_SCHEMA_VERSION = "phase4-workspace-report-v1"
 
@@ -59,28 +60,29 @@ def build_workspace_report(
 
 
 def format_workspace_report_table(payload: dict[str, Any]) -> str:
+    safe = safe_terminal_field
     pricing = payload["pricing"]
     lines = [
         (
             "Workspace report: "
-            f"{payload['filters']['period']} as of {payload['filters']['as_of']} "
-            f"({payload['filters']['redaction_mode']})"
+            f"{safe(payload['filters']['period'])} as of {safe(payload['filters']['as_of'])} "
+            f"({safe(payload['filters']['redaction_mode'])})"
         )
     ]
     if pricing["included"]:
         lines.append(
             "Pricing: "
-            f"{pricing['selected_rule_set_id']} "
-            f"({pricing['coverage_status']}, "
-            f"{pricing['reference_usd_estimate']} {pricing['currency']})"
+            f"{safe(pricing['selected_rule_set_id'])} "
+            f"({safe(pricing['coverage_status'])}, "
+            f"{pricing['reference_usd_estimate']} {safe(pricing['currency'])})"
         )
     else:
-        lines.append(f"Pricing: omitted ({pricing['warnings'][0]})")
+        lines.append(f"Pricing: omitted ({safe(pricing['warnings'][0])})")
     for item in payload["data"]["workspaces"][:10]:
         line = (
-            f"- {item['workspace_label']}: {item['total_tokens']} tokens, "
+            f"- {safe(item['workspace_label'])}: {item['total_tokens']} tokens, "
             f"sessions={item['session_count']}, agents={item['agent_run_count']}, "
-            f"top_model={item['top_model']}"
+            f"top_model={safe(item['top_model'])}"
         )
         if pricing["included"]:
             line += f", usd={item['reference_usd_estimate']}"

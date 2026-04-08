@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from codex_ledger.domain.records import ImportCandidate, WorkspaceRecord
 from codex_ledger.ingest.service import run_import_batch
 from codex_ledger.normalize.privacy import render_workspace_label
@@ -221,6 +223,98 @@ def test_raw_file_hashes_are_stable(tmp_path: Path) -> None:
     assert first_hash == sha256_file(fixture)
     assert second_hash == first_hash
     assert second_relpath == stored_relpath
+
+
+def test_archive_raw_file_rejects_symlink_target(tmp_path: Path) -> None:
+    raw_root = tmp_path / "raw"
+    fixture = fixture_path("sample_rollout.jsonl")
+    content_hash = sha256_file(fixture)
+    stored_relpath = Path(f"codex/local_rollout_file/{content_hash[:2]}/{content_hash}.jsonl")
+    target_path = raw_root / stored_relpath
+    victim_path = tmp_path / "victim.txt"
+    victim_path.write_text("do not overwrite\n", encoding="utf-8")
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.symlink_to(victim_path)
+
+    with pytest.raises(ValueError, match="symlink"):
+        archive_raw_file(raw_root, fixture, "codex", "local_rollout_file")
+
+    assert victim_path.read_text(encoding="utf-8") == "do not overwrite\n"
+
+
+def test_archive_raw_file_rejects_symlinked_archive_root(tmp_path: Path) -> None:
+    real_root = tmp_path / "real-raw"
+    real_root.mkdir()
+    symlink_root = tmp_path / "raw-link"
+    symlink_root.symlink_to(real_root, target_is_directory=True)
+    fixture = fixture_path("sample_rollout.jsonl")
+
+    with pytest.raises(ValueError, match="symlinked archive root"):
+        archive_raw_file(symlink_root, fixture, "codex", "local_rollout_file")
+
+
+def test_archive_raw_file_rejects_archive_root_with_symlinked_ancestor(tmp_path: Path) -> None:
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    symlink_parent = tmp_path / "link-parent"
+    symlink_parent.symlink_to(real_parent, target_is_directory=True)
+    archive_root = symlink_parent / "raw"
+    fixture = fixture_path("sample_rollout.jsonl")
+
+    with pytest.raises(ValueError, match="symlinked archive root"):
+        archive_raw_file(archive_root, fixture, "codex", "local_rollout_file")
+
+
+def test_archive_raw_file_rejects_archive_root_with_dot_dot_before_symlinked_ancestor(
+    tmp_path: Path,
+) -> None:
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    symlink_parent = tmp_path / "link-parent"
+    symlink_parent.symlink_to(real_parent, target_is_directory=True)
+    archive_root = tmp_path / "missing" / ".." / "link-parent" / "raw"
+    fixture = fixture_path("sample_rollout.jsonl")
+
+    with pytest.raises(ValueError, match="symlinked archive root"):
+        archive_raw_file(archive_root, fixture, "codex", "local_rollout_file")
+
+
+def test_import_rejects_oversized_local_rollout_file(tmp_path: Path, monkeypatch) -> None:
+    archive_home = tmp_path / "archive"
+    oversized = tmp_path / "oversized.jsonl"
+    oversized.write_text('{"type":"session_meta","payload":{"id":"s"}}\n', encoding="utf-8")
+    monkeypatch.setattr("codex_ledger.providers.codex.parser.MAX_IMPORT_FILE_BYTES", 8)
+    monkeypatch.setattr("codex_ledger.storage.archive.MAX_ARCHIVE_COPY_BYTES", 8)
+
+    summary, outcomes = run_import_batch(
+        archive_home=archive_home,
+        candidates=(ImportCandidate(oversized, "local_rollout_file"),),
+        provider="codex",
+        host="standalone_cli",
+        source_kind="local_rollout_file",
+        full_backfill=False,
+    )
+
+    assert summary.failed_file_count == 1
+    assert outcomes[0].status == "file_too_large"
+    assert "exceeds configured limit" in str(outcomes[0].detail)
+
+
+def test_archive_raw_file_rejects_oversized_input_before_hashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw_root = tmp_path / "raw"
+    oversized = tmp_path / "oversized.jsonl"
+    oversized.write_text("x" * 16, encoding="utf-8")
+    monkeypatch.setattr("codex_ledger.storage.archive.MAX_ARCHIVE_COPY_BYTES", 8)
+
+    def fail_if_hashed(_: Path) -> str:
+        raise AssertionError("sha256_file should not be called for oversized inputs")
+
+    monkeypatch.setattr("codex_ledger.storage.archive.sha256_file", fail_if_hashed)
+
+    with pytest.raises(ValueError, match="exceeds configured limit"):
+        archive_raw_file(raw_root, oversized, "codex", "local_rollout_file")
 
 
 def test_path_like_model_ids_remain_models_not_workspaces(tmp_path: Path) -> None:

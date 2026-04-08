@@ -18,6 +18,7 @@ from codex_ledger.storage.migrations import (
 from codex_ledger.storage.repository import fetch_workspace_alias_map
 from codex_ledger.utils.hashing import sha256_text
 from codex_ledger.utils.json import canonical_json
+from codex_ledger.utils.terminal import safe_terminal_field
 from codex_ledger.utils.time import utc_now_iso
 
 PRICING_COVERAGE_SCHEMA_VERSION = "phase3-pricing-coverage-v1"
@@ -254,11 +255,12 @@ def build_pricing_coverage(
 
 
 def format_pricing_recalc_table(payload: dict[str, Any]) -> str:
+    safe = safe_terminal_field
     lines = [
-        f"Rule set: {payload['rule_set_id']}",
-        f"Pricing plane: {payload['pricing_plane']}",
+        f"Rule set: {safe(payload['rule_set_id'])}",
+        f"Pricing plane: {safe(payload['pricing_plane'])}",
         f"Events evaluated: {payload['event_count']}",
-        f"Priced amount total: {payload['priced_amount_total']} {payload['currency']}",
+        f"Priced amount total: {payload['priced_amount_total']} {safe(payload['currency'])}",
         (
             "Upserts: "
             f"inserted={payload['inserted_count']}, "
@@ -267,14 +269,15 @@ def format_pricing_recalc_table(payload: dict[str, Any]) -> str:
         ),
     ]
     for status, count in sorted(payload["status_counts"].items()):
-        lines.append(f"- {status}: {count}")
+        lines.append(f"- {safe(status)}: {count}")
     return "\n".join(lines)
 
 
 def format_pricing_coverage_table(payload: dict[str, Any]) -> str:
+    safe = safe_terminal_field
     summary = payload["summary"]
     lines = [
-        f"Pricing coverage: {payload['rule_set_id']}",
+        f"Pricing coverage: {safe(payload['rule_set_id'])}",
         (
             "Priced events: "
             f"{summary['priced_event_count']} "
@@ -285,12 +288,12 @@ def format_pricing_coverage_table(payload: dict[str, Any]) -> str:
             f"{summary['unpriced_event_count']} "
             f"({summary['unpriced_token_total']} tokens)"
         ),
-        f"Reference USD total: {summary['priced_amount_total']} {payload['currency']}",
+        f"Reference USD total: {summary['priced_amount_total']} {safe(payload['currency'])}",
         "Unsupported or unknown by model:",
     ]
     for item in payload["unsupported_or_unknown_by_model"][:5]:
         lines.append(
-            f"- {item['model_id']} / {item['reason']}: "
+            f"- {safe(item['model_id'])} / {safe(item['reason'])}: "
             f"{item['event_count']} events, {item['token_total']} tokens"
         )
     return "\n".join(lines)

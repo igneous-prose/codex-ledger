@@ -15,6 +15,7 @@ from codex_ledger.reports.common import (
     summarize_token_totals,
 )
 from codex_ledger.storage.migrations import connect_database, default_database_path
+from codex_ledger.utils.terminal import safe_terminal_field
 
 AGGREGATE_REPORT_SCHEMA_VERSION = "phase4-aggregate-report-v1"
 
@@ -65,10 +66,14 @@ def build_aggregate_report(
 
 
 def format_aggregate_report_table(payload: dict[str, Any]) -> str:
+    safe = safe_terminal_field
     totals = payload["data"]["selected_period_totals"]
     pricing = payload["pricing"]
     lines = [
-        (f"Aggregate report: {payload['filters']['period']} as of {payload['filters']['as_of']}"),
+        (
+            f"Aggregate report: {safe(payload['filters']['period'])} "
+            f"as of {safe(payload['filters']['as_of'])}"
+        ),
         f"Events: {totals['event_count']}",
         f"Tokens: {totals['total_tokens']}",
         f"Workspaces: {totals['workspace_count']}",
@@ -77,15 +82,15 @@ def format_aggregate_report_table(payload: dict[str, Any]) -> str:
     if pricing["included"]:
         lines.append(
             "Pricing: "
-            f"{pricing['selected_rule_set_id']} "
-            f"({pricing['coverage_status']}, "
-            f"{pricing['reference_usd_estimate']} {pricing['currency']})"
+            f"{safe(pricing['selected_rule_set_id'])} "
+            f"({safe(pricing['coverage_status'])}, "
+            f"{pricing['reference_usd_estimate']} {safe(pricing['currency'])})"
         )
     else:
-        lines.append(f"Pricing: omitted ({pricing['warnings'][0]})")
+        lines.append(f"Pricing: omitted ({safe(pricing['warnings'][0])})")
     lines.append("Top models:")
     for item in payload["data"]["totals_by_model"][:5]:
-        lines.append(f"- {item['model_id']}: {item['total_tokens']} tokens")
+        lines.append(f"- {safe(item['model_id'])}: {item['total_tokens']} tokens")
     return "\n".join(lines)
 
 
