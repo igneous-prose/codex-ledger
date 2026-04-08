@@ -27,9 +27,8 @@ def archive_raw_file(
         )
     content_hash = sha256_file(source_path)
     stored_relpath = stored_raw_relpath(provider, source_kind, content_hash, source_path.suffix)
-    archive_root_input = archive_raw_root.expanduser()
-    if archive_root_input.is_symlink():
-        raise ValueError(f"Refusing to use symlinked archive root: {archive_root_input}")
+    archive_root_input = _expanded_archive_root_input(archive_raw_root)
+    _assert_no_symlink_path_prefix(archive_root_input, label="archive root")
     archive_root = archive_root_input.resolve(strict=False)
     target_path = archive_root / stored_relpath
     _assert_no_symlink_components(archive_root, target_path.parent)
@@ -56,6 +55,19 @@ def _assert_no_symlink_components(archive_root: Path, target_dir: Path) -> None:
         current = current / part
         if current.is_symlink():
             raise ValueError(f"Refusing to use symlinked archive path: {current}")
+
+
+def _expanded_archive_root_input(archive_raw_root: Path) -> Path:
+    expanded = archive_raw_root.expanduser()
+    return expanded if expanded.is_absolute() else Path.cwd() / expanded
+
+
+def _assert_no_symlink_path_prefix(path: Path, *, label: str) -> None:
+    current = path.anchor and Path(path.anchor) or Path(".")
+    for part in path.parts[1:] if path.is_absolute() else path.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"Refusing to use symlinked {label}: {current}")
 
 
 def _stream_copy_no_follow(source_path: Path, target_path: Path) -> None:
