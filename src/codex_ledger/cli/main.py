@@ -618,10 +618,7 @@ def run_doctor(args: argparse.Namespace) -> int:
         show_full_paths=show_full_paths,
         anchor=archive_home,
     )
-    print(
-        "Database path: "
-        f"{database_label}"
-    )
+    print(f"Database path: {database_label}")
     print(f"History persistence: {payload['history_persistence_status']}")
     for name, path in payload["expected_layout"].items():
         print(
