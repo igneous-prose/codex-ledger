@@ -27,7 +27,7 @@ def archive_raw_file(
         )
     content_hash = sha256_file(source_path)
     stored_relpath = stored_raw_relpath(provider, source_kind, content_hash, source_path.suffix)
-    archive_root_input = _expanded_archive_root_input(archive_raw_root)
+    archive_root_input = _normalized_archive_root_input(archive_raw_root)
     _assert_no_symlink_path_prefix(archive_root_input, label="archive root")
     archive_root = archive_root_input.resolve(strict=False)
     target_path = archive_root / stored_relpath
@@ -57,9 +57,10 @@ def _assert_no_symlink_components(archive_root: Path, target_dir: Path) -> None:
             raise ValueError(f"Refusing to use symlinked archive path: {current}")
 
 
-def _expanded_archive_root_input(archive_raw_root: Path) -> Path:
+def _normalized_archive_root_input(archive_raw_root: Path) -> Path:
     expanded = archive_raw_root.expanduser()
-    return expanded if expanded.is_absolute() else Path.cwd() / expanded
+    absolute = expanded if expanded.is_absolute() else Path.cwd() / expanded
+    return Path(os.path.normpath(absolute))
 
 
 def _assert_no_symlink_path_prefix(path: Path, *, label: str) -> None:

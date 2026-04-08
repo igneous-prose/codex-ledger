@@ -265,6 +265,20 @@ def test_archive_raw_file_rejects_archive_root_with_symlinked_ancestor(tmp_path:
         archive_raw_file(archive_root, fixture, "codex", "local_rollout_file")
 
 
+def test_archive_raw_file_rejects_archive_root_with_dot_dot_before_symlinked_ancestor(
+    tmp_path: Path,
+) -> None:
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    symlink_parent = tmp_path / "link-parent"
+    symlink_parent.symlink_to(real_parent, target_is_directory=True)
+    archive_root = tmp_path / "missing" / ".." / "link-parent" / "raw"
+    fixture = fixture_path("sample_rollout.jsonl")
+
+    with pytest.raises(ValueError, match="symlinked archive root"):
+        archive_raw_file(archive_root, fixture, "codex", "local_rollout_file")
+
+
 def test_import_rejects_oversized_local_rollout_file(tmp_path: Path, monkeypatch) -> None:
     archive_home = tmp_path / "archive"
     oversized = tmp_path / "oversized.jsonl"
