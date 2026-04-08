@@ -27,7 +27,10 @@ def archive_raw_file(
             f"({size_bytes} bytes > {MAX_ARCHIVE_COPY_BYTES} bytes)"
         )
     stored_relpath = stored_raw_relpath(provider, source_kind, content_hash, source_path.suffix)
-    archive_root = archive_raw_root.expanduser().resolve(strict=False)
+    archive_root_input = archive_raw_root.expanduser()
+    if archive_root_input.is_symlink():
+        raise ValueError(f"Refusing to use symlinked archive root: {archive_root_input}")
+    archive_root = archive_root_input.resolve(strict=False)
     target_path = archive_root / stored_relpath
     _assert_no_symlink_components(archive_root, target_path.parent)
     if target_path.is_symlink():

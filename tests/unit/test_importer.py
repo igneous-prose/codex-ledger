@@ -242,6 +242,17 @@ def test_archive_raw_file_rejects_symlink_target(tmp_path: Path) -> None:
     assert victim_path.read_text(encoding="utf-8") == "do not overwrite\n"
 
 
+def test_archive_raw_file_rejects_symlinked_archive_root(tmp_path: Path) -> None:
+    real_root = tmp_path / "real-raw"
+    real_root.mkdir()
+    symlink_root = tmp_path / "raw-link"
+    symlink_root.symlink_to(real_root, target_is_directory=True)
+    fixture = fixture_path("sample_rollout.jsonl")
+
+    with pytest.raises(ValueError, match="symlinked archive root"):
+        archive_raw_file(symlink_root, fixture, "codex", "local_rollout_file")
+
+
 def test_import_rejects_oversized_local_rollout_file(tmp_path: Path, monkeypatch) -> None:
     archive_home = tmp_path / "archive"
     oversized = tmp_path / "oversized.jsonl"
