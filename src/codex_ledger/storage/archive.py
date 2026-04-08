@@ -19,13 +19,13 @@ def archive_raw_file(
     provider: str,
     source_kind: str,
 ) -> tuple[str, str, int]:
-    content_hash = sha256_file(source_path)
     size_bytes = source_path.stat().st_size
     if size_bytes > MAX_ARCHIVE_COPY_BYTES:
         raise ValueError(
             "source file exceeds configured limit "
             f"({size_bytes} bytes > {MAX_ARCHIVE_COPY_BYTES} bytes)"
         )
+    content_hash = sha256_file(source_path)
     stored_relpath = stored_raw_relpath(provider, source_kind, content_hash, source_path.suffix)
     archive_root_input = archive_raw_root.expanduser()
     if archive_root_input.is_symlink():

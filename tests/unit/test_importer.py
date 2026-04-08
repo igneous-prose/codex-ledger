@@ -274,6 +274,23 @@ def test_import_rejects_oversized_local_rollout_file(tmp_path: Path, monkeypatch
     assert "exceeds configured limit" in str(outcomes[0].detail)
 
 
+def test_archive_raw_file_rejects_oversized_input_before_hashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw_root = tmp_path / "raw"
+    oversized = tmp_path / "oversized.jsonl"
+    oversized.write_text("x" * 16, encoding="utf-8")
+    monkeypatch.setattr("codex_ledger.storage.archive.MAX_ARCHIVE_COPY_BYTES", 8)
+
+    def fail_if_hashed(_: Path) -> str:
+        raise AssertionError("sha256_file should not be called for oversized inputs")
+
+    monkeypatch.setattr("codex_ledger.storage.archive.sha256_file", fail_if_hashed)
+
+    with pytest.raises(ValueError, match="exceeds configured limit"):
+        archive_raw_file(raw_root, oversized, "codex", "local_rollout_file")
+
+
 def test_path_like_model_ids_remain_models_not_workspaces(tmp_path: Path) -> None:
     archive_home = tmp_path / "archive"
     candidates = (
