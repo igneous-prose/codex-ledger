@@ -12,7 +12,7 @@ This audit proposes one scoped task in each requested category.
 
 **Proposed task:**
 - Normalize naming to avoid the apparent typo/ambiguity (`phase21` vs `phase2.1`) in developer-facing references.
-- Keep backwards compatibility for already-applied migration names (do not silently rename a migration that may already be recorded in `schema_migrations`; add an alias/compatibility strategy instead).
+- If the migration filename is renamed, update migration-name displays and tests that currently assert the existing filename. Migration application itself is keyed by version, but `schema_migrations.name`, doctor output, and migration-list tests still surface the filename.
 
 ## 2) Bug Fix Task
 
@@ -28,21 +28,22 @@ This audit proposes one scoped task in each requested category.
 
 ## 3) Comment/Documentation Discrepancy Task
 
-**Issue found:** Privacy documentation says default CLI output does not emit absolute paths, but current sync/import output does.
+**Issue found:** Privacy documentation says default CLI output does not emit absolute paths, but current `sync`, `import codex-json`, and `doctor` output still does.
 
 **Evidence:**
 - `docs/PRIVACY.md` states default CLI output does not emit absolute paths.
-- CLI currently prints resolved `outcome.source_path` values in default output.
+- `run_sync` and `run_import_codex_json` print resolved `outcome.source_path` values in default output.
+- `run_doctor` prints archive, database, layout, and source-root paths in default output.
 
 **Proposed task:**
-- After fixing path redaction behavior, update CLI help text and privacy docs to explicitly describe which commands redact paths by default and how users can opt in to full paths.
+- After deciding which CLI surfaces should redact paths by default, update CLI help text and privacy docs to describe that behavior precisely and call out any explicit opt-in for full paths.
 
 ## 4) Test Improvement Task
 
-**Issue found:** There is no explicit regression test guaranteeing that default CLI sync/import output avoids absolute path leakage.
+**Issue found:** There is no explicit regression test guaranteeing that default CLI output avoids absolute path leakage on the path-printing surfaces identified above.
 
 **Proposed task:**
-- Add integration tests for `codex-ledger sync` and `codex-ledger import codex-json` asserting:
+- Add integration tests for `codex-ledger sync`, `codex-ledger import codex-json`, and, if the privacy contract continues to cover it, `codex-ledger doctor`, asserting:
   - default output does not contain absolute paths,
   - redacted/relative identifiers are shown,
   - any future opt-in `--show-full-paths` mode (if implemented) is the only code path allowed to print absolute paths.
