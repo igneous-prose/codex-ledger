@@ -33,7 +33,7 @@ For local wheel validation before publication:
 
 ```bash
 uv build
-pipx install ./dist/codex_ledger-0.1.0-py3-none-any.whl
+pipx install ./dist/codex_ledger-0.1.1-py3-none-any.whl
 ```
 
 After the package is actually published, the intended install surface is:

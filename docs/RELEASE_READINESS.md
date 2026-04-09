@@ -1,6 +1,6 @@
 # Release Readiness
 
-This checklist is the concrete v0.1.0 readiness gate for the current repository state.
+This checklist is the concrete v0.1.1 readiness gate for the current repository state.
 
 ## Required Checks
 
