@@ -90,6 +90,22 @@ def test_unexpected_repo_rule_file_is_rejected(tmp_path: Path, monkeypatch) -> N
         _clear_pricing_rule_caches()
 
 
+def test_empty_repo_rule_mirror_is_rejected(tmp_path: Path, monkeypatch) -> None:
+    repo_rule_dir = tmp_path / "pricing" / "rules"
+    repo_rule_dir.mkdir(parents=True)
+    monkeypatch.setattr("codex_ledger.pricing.rules._repo_root", lambda: tmp_path)
+    _clear_pricing_rule_caches()
+
+    try:
+        load_rule_set(RULE_SET_ID)
+    except PricingRuleValidationError as exc:
+        assert "Repo pricing rule mirror is empty" in str(exc)
+    else:
+        raise AssertionError("expected empty repo rule mirror to be rejected")
+    finally:
+        _clear_pricing_rule_caches()
+
+
 def test_invalid_rule_file_is_rejected(tmp_path: Path) -> None:
     rule_path = tmp_path / "invalid-rule.json"
     rule_path.write_text(

@@ -302,15 +302,21 @@ def _resource_rule_files() -> tuple[Path, ...]:
 
 
 def _repo_rule_files() -> tuple[Path, ...]:
-    repo_rule_dir = _repo_root() / "pricing" / "rules"
+    repo_rule_dir = _repo_rule_dir()
     if not repo_rule_dir.exists():
         return ()
     return tuple(path for path in sorted(repo_rule_dir.glob("*.json")) if path.is_file())
 
 
 def _validate_repo_rule_mirror() -> None:
+    repo_rule_dir = _repo_rule_dir()
     repo_files = _repo_rule_files()
     if not repo_files:
+        if repo_rule_dir.exists():
+            raise PricingRuleValidationError(
+                "Repo pricing rule mirror is empty; expected bundled mirror files under "
+                f"{repo_rule_dir}"
+            )
         return
 
     bundled_by_filename = {
@@ -337,6 +343,10 @@ def _validate_repo_rule_mirror() -> None:
                 "Repo pricing rule mirror does not match bundled rule data for "
                 f"{bundled.rule_set_id}: {filename}"
             )
+
+
+def _repo_rule_dir() -> Path:
+    return _repo_root() / "pricing" / "rules"
 
 
 def _to_datetime(value: str | None) -> datetime:
