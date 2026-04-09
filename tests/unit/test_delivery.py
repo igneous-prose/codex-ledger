@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from datetime import date
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from codex_ledger.reports.aggregate import build_aggregate_report
 from codex_ledger.reports.artifacts import write_report_artifact
 from codex_ledger.reports.schema import ReportValidationError, load_report_file, stable_report_json
 from codex_ledger.reports.workspaces import build_workspace_report
+from codex_ledger.storage.output import write_text_output
 from codex_ledger.verify.service import verify_ledger, verify_reports
 from tests.test_support import fixture_path, open_database
 
@@ -236,6 +238,33 @@ def test_report_artifact_write_rejects_symlinked_output_path(tmp_path: Path) -> 
         write_report_artifact(payload, target)
 
     assert victim.read_text(encoding="utf-8") == '{"untouched":true}\n'
+
+
+def test_write_text_output_allows_system_tmp_symlink_root() -> None:
+    tmp_root = Path("/tmp")
+    if not tmp_root.is_symlink():
+        pytest.skip("/tmp is not a symlink on this platform")
+
+    output_dir = Path(tempfile.mkdtemp(prefix="codex-ledger-output-", dir=str(tmp_root)))
+    output_path = output_dir / "out.json"
+    try:
+        written = write_text_output(output_path, '{"ok":true}\n')
+        assert written == output_path
+        assert output_path.read_text(encoding="utf-8") == '{"ok":true}\n'
+    finally:
+        if output_path.exists():
+            output_path.unlink()
+        output_dir.rmdir()
+
+
+def test_write_text_output_rejects_symlinked_user_controlled_parent(tmp_path: Path) -> None:
+    real_dir = tmp_path / "real-parent"
+    real_dir.mkdir()
+    symlink_dir = tmp_path / "parent-link"
+    symlink_dir.symlink_to(real_dir, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink"):
+        write_text_output(symlink_dir / "out.json", '{"ok":true}\n')
 
 
 def test_render_heatmap_rejects_symlinked_output_path(tmp_path: Path) -> None:
