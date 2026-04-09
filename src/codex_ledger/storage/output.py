@@ -7,6 +7,7 @@ TRUSTED_OUTPUT_SYMLINK_ALIASES = {
     Path("/tmp"): Path("/private/tmp"),
     Path("/var"): Path("/private/var"),
 }
+OWNER_READ_WRITE_MODE = 0o600
 
 
 def prepare_output_path(output_path: Path) -> Path:
@@ -47,7 +48,7 @@ def _assert_no_untrusted_symlink_path_prefix(path: Path, *, label: str) -> None:
 
 def _write_bytes_no_follow(target: Path, data: bytes) -> None:
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    file_descriptor = os.open(target, flags | getattr(os, "O_NOFOLLOW", 0), 0o644)
+    file_descriptor = os.open(target, flags | getattr(os, "O_NOFOLLOW", 0), OWNER_READ_WRITE_MODE)
     try:
         with os.fdopen(file_descriptor, "wb") as handle:
             file_descriptor = -1

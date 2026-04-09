@@ -6,6 +6,7 @@ from pathlib import Path
 from codex_ledger.utils.hashing import sha256_file
 
 MAX_ARCHIVE_COPY_BYTES = 64 * 1024 * 1024
+OWNER_READ_ONLY_MODE = 0o400
 
 
 def stored_raw_relpath(provider: str, source_kind: str, content_hash: str, suffix: str) -> str:
@@ -38,12 +39,12 @@ def archive_raw_file(
         target_path.parent.mkdir(parents=True, exist_ok=True)
         _assert_no_symlink_components(archive_root, target_path.parent)
         _stream_copy_no_follow(source_path, target_path)
-        target_path.chmod(0o444)
+        target_path.chmod(OWNER_READ_ONLY_MODE)
     else:
         target_size = target_path.stat().st_size
         if target_size != size_bytes:
             raise ValueError(f"Archived file size mismatch for {target_path}")
-        os.chmod(target_path, 0o444)
+        os.chmod(target_path, OWNER_READ_ONLY_MODE)
     return content_hash, stored_relpath, size_bytes
 
 
@@ -73,7 +74,7 @@ def _assert_no_symlink_path_prefix(path: Path, *, label: str) -> None:
 
 def _stream_copy_no_follow(source_path: Path, target_path: Path) -> None:
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    file_descriptor = os.open(target_path, flags | getattr(os, "O_NOFOLLOW", 0), 0o444)
+    file_descriptor = os.open(target_path, flags | getattr(os, "O_NOFOLLOW", 0), 0o600)
     try:
         with source_path.open("rb") as source_handle, os.fdopen(file_descriptor, "wb") as target:
             file_descriptor = -1

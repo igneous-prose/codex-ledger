@@ -9,7 +9,7 @@ from codex_ledger.domain.records import ImportCandidate, WorkspaceRecord
 from codex_ledger.ingest.service import run_import_batch
 from codex_ledger.normalize.privacy import render_workspace_label
 from codex_ledger.normalize.workspaces import resolve_workspace
-from codex_ledger.storage.archive import archive_raw_file
+from codex_ledger.storage.archive import OWNER_READ_ONLY_MODE, archive_raw_file
 from codex_ledger.storage.repository import fetch_workspace_alias_map, upsert_workspace_alias
 from codex_ledger.utils.hashing import sha256_file, sha256_text
 from tests.test_support import fetch_all, fixture_path, open_database
@@ -240,6 +240,15 @@ def test_archive_raw_file_rejects_symlink_target(tmp_path: Path) -> None:
         archive_raw_file(raw_root, fixture, "codex", "local_rollout_file")
 
     assert victim_path.read_text(encoding="utf-8") == "do not overwrite\n"
+
+
+def test_archive_raw_file_writes_owner_read_only_permissions(tmp_path: Path) -> None:
+    raw_root = tmp_path / "raw"
+    fixture = fixture_path("sample_rollout.jsonl")
+
+    _, stored_relpath, _ = archive_raw_file(raw_root, fixture, "codex", "local_rollout_file")
+
+    assert (raw_root / stored_relpath).stat().st_mode & 0o777 == OWNER_READ_ONLY_MODE
 
 
 def test_archive_raw_file_rejects_symlinked_archive_root(tmp_path: Path) -> None:

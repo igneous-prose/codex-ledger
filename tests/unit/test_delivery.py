@@ -16,7 +16,7 @@ from codex_ledger.reports.aggregate import build_aggregate_report
 from codex_ledger.reports.artifacts import write_report_artifact
 from codex_ledger.reports.schema import ReportValidationError, load_report_file, stable_report_json
 from codex_ledger.reports.workspaces import build_workspace_report
-from codex_ledger.storage.output import write_text_output
+from codex_ledger.storage.output import OWNER_READ_WRITE_MODE, write_text_output
 from codex_ledger.verify.service import verify_ledger, verify_reports
 from tests.test_support import fixture_path, open_database
 
@@ -251,6 +251,7 @@ def test_write_text_output_allows_system_tmp_symlink_root() -> None:
         written = write_text_output(output_path, '{"ok":true}\n')
         assert written == output_path
         assert output_path.read_text(encoding="utf-8") == '{"ok":true}\n'
+        assert output_path.stat().st_mode & 0o777 == OWNER_READ_WRITE_MODE
     finally:
         if output_path.exists():
             output_path.unlink()
