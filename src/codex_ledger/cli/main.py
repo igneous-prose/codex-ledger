@@ -606,12 +606,18 @@ def run_price_coverage(args: argparse.Namespace) -> int:
 def run_doctor(args: argparse.Namespace) -> int:
     home = _resolve_archive_home_argument(args.archive_home)
     payload = summarize_doctor_status(home)
+    show_full_paths = bool(args.show_full_paths)
 
     if args.as_json:
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(
+            json.dumps(
+                _doctor_payload_for_output(payload, show_full_paths=show_full_paths),
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0
 
-    show_full_paths = bool(args.show_full_paths)
     archive_home = Path(str(payload["archive_home"]))
     print(f"Archive home: {_display_local_path(archive_home, show_full_paths=show_full_paths)}")
     database_label = _display_local_path(
@@ -877,6 +883,52 @@ def _display_local_path(
 
 def _parse_date(value: str) -> date:
     return date.fromisoformat(value)
+
+
+def _doctor_payload_for_output(
+    payload: dict[str, object],
+    *,
+    show_full_paths: bool,
+) -> dict[str, object]:
+    archive_home = Path(str(payload["archive_home"]))
+    rendered = dict(payload)
+    rendered["archive_home"] = _display_local_path(
+        archive_home,
+        show_full_paths=show_full_paths,
+    )
+    rendered["database_path"] = _display_local_path(
+        Path(str(payload["database_path"])),
+        show_full_paths=show_full_paths,
+        anchor=archive_home,
+    )
+
+    expected_layout = payload.get("expected_layout")
+    if isinstance(expected_layout, dict):
+        rendered["expected_layout"] = {
+            str(name): _display_local_path(
+                Path(str(path)),
+                show_full_paths=show_full_paths,
+                anchor=archive_home,
+            )
+            for name, path in expected_layout.items()
+        }
+
+    source_roots = payload.get("source_roots")
+    if isinstance(source_roots, list):
+        rendered["source_roots"] = [
+            {
+                **root,
+                "path": _display_local_path(
+                    Path(str(root["path"])),
+                    show_full_paths=show_full_paths,
+                ),
+            }
+            if isinstance(root, dict) and "path" in root
+            else root
+            for root in source_roots
+        ]
+
+    return rendered
 
 
 def _maybe_write_report_output(payload: dict[str, object], output_path: Path | None) -> None:
