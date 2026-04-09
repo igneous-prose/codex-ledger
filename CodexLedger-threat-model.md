@@ -32,7 +32,8 @@
    - Evidence: `src/codex_ledger/reports/artifacts.py`, `src/codex_ledger/render/service.py`.
 
 3. Pricing rule integrity remains high impact
-   - Offline pricing rules still determine reference USD totals. A tampered rule file can materially alter coverage and cost attribution without a cryptographic trust anchor.
+   - Offline pricing rules still determine reference USD totals. The runtime now treats packaged rule data as authoritative and rejects drifted repo mirrors, which blocks silent local edits to `pricing/rules/*.json`.
+   - Residual risk remains for package-level tampering or a compromised local install because there is still no external signature or trust anchor beyond the shipped bytes.
    - Evidence: `src/codex_ledger/pricing/rules.py`, `pricing/rules/*.json`.
 
 4. SQLite and raw archive tampering remain local integrity risks
@@ -61,10 +62,7 @@
    - Human-readable CLI output now escapes these values, so the residual risk is lower and mostly limited to raw JSON consumers.
 
 ## Priority Backlog
-- High: add a reconcile input size cap and reject oversized files before parse.
-- High: harden report/render output writes against symlinked destinations and symlinked parent components.
-- Medium: make `doctor --json` privacy-safe by default while preserving explicit `--show-full-paths` opt-in behavior.
-- Medium: consider integrity attestation for pricing rules if the tool will be used for stronger audit claims.
+- Medium: consider integrity attestation for pricing rules if the tool will be used for stronger audit claims across installation boundaries.
 - Low: consider documenting that JSON-mode diagnostics may still require operator care when shared externally.
 
 ## Review Focus Paths
