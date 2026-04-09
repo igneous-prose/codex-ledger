@@ -1,6 +1,8 @@
 # Pricing Rules
 
-Phase 3 adds repo-tracked, offline pricing rules under `pricing/rules/`.
+Phase 3 adds packaged, offline pricing rules under `src/codex_ledger/pricing/rules_data/`.
+The repository copies under `pricing/rules/` are development mirrors and must match the
+packaged copies byte-for-byte.
 
 The pricing layer in this phase is intentionally narrow:
 
@@ -22,6 +24,10 @@ Rule files are versioned JSON documents. Each rule set declares:
 
 The seeded rule set is conservative and only covers explicitly configured models. Unknown
 or preview models remain unsupported until a rule file opts into a rate.
+
+Bundled rule data is authoritative at runtime. If a repository mirror drifts or an
+unexpected repo-only rule file appears, loading fails fast instead of silently changing the
+reference pricing baseline.
 
 Use:
 

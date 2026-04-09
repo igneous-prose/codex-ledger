@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from functools import lru_cache
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -65,37 +66,36 @@ class RuleSelection:
     rule: PriceRule | None
 
 
+@dataclass(frozen=True)
+class BundledRuleFile:
+    rule_set_id: str
+    logical_source_path: str
+    filesystem_path: Path
+    source_hash: str
+
+
 def available_rule_set_ids() -> tuple[str, ...]:
-    ids = [load_rule_file(path).rule_set_id for path in list_rule_files()]
-    return tuple(sorted(ids))
+    _validate_repo_rule_mirror()
+    return tuple(sorted(_bundled_rule_files_by_id()))
 
 
 def list_rule_files() -> tuple[Path, ...]:
-    repo_root = _repo_root()
-    repo_rule_dir = repo_root / "pricing" / "rules"
-    paths: list[Path] = []
-    if repo_rule_dir.exists():
-        paths.extend(path for path in sorted(repo_rule_dir.glob("*.json")) if path.is_file())
-    if paths:
-        return tuple(paths)
-
-    resource_root = resources.files("codex_ledger.pricing").joinpath("rules_data")
-    resource_paths = []
-    for item in sorted(resource_root.iterdir(), key=lambda ref: ref.name):
-        if item.name.endswith(".json"):
-            resource_paths.append(Path(str(item)))
-    return tuple(resource_paths)
+    _validate_repo_rule_mirror()
+    return tuple(
+        item.filesystem_path
+        for item in sorted(_bundled_rule_files_by_id().values(), key=lambda item: item.rule_set_id)
+    )
 
 
 def load_rule_set(rule_set_id: str) -> PricingRuleSet:
-    for path in list_rule_files():
-        candidate = load_rule_file(path)
-        if candidate.rule_set_id == rule_set_id:
-            return candidate
-    raise PricingRuleValidationError(f"Unknown pricing rule set: {rule_set_id}")
+    bundled = _bundled_rule_files_by_id().get(rule_set_id)
+    if bundled is None:
+        raise PricingRuleValidationError(f"Unknown pricing rule set: {rule_set_id}")
+    _validate_repo_rule_mirror()
+    return load_rule_file(bundled.filesystem_path, logical_source_path=bundled.logical_source_path)
 
 
-def load_rule_file(path: Path) -> PricingRuleSet:
+def load_rule_file(path: Path, *, logical_source_path: str | None = None) -> PricingRuleSet:
     document = _load_json(path)
     token_mapping = _parse_token_mapping(document.get("token_mapping"))
     rules = tuple(_parse_rule(item) for item in _expect_list(document, "rules"))
@@ -111,7 +111,7 @@ def load_rule_file(path: Path) -> PricingRuleSet:
         confidence=_expect_str(document, "confidence"),
         token_mapping=token_mapping,
         provenance=_expect_dict(document, "provenance"),
-        source_path=str(path),
+        source_path=str(path) if logical_source_path is None else logical_source_path,
         source_hash=sha256_file(path),
         rules=rules,
     )
@@ -273,6 +273,80 @@ def _is_rule_active(rule: PriceRule, event_ts_utc: str) -> bool:
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+@lru_cache(maxsize=1)
+def _bundled_rule_files_by_id() -> dict[str, BundledRuleFile]:
+    files: dict[str, BundledRuleFile] = {}
+    for path in _resource_rule_files():
+        document = _load_json(path)
+        rule_set_id = _expect_str(document, "rule_set_id")
+        if rule_set_id in files:
+            raise PricingRuleValidationError(f"Duplicate bundled rule_set_id: {rule_set_id}")
+        files[rule_set_id] = BundledRuleFile(
+            rule_set_id=rule_set_id,
+            logical_source_path=f"package:codex_ledger.pricing/rules_data/{path.name}",
+            filesystem_path=path,
+            source_hash=sha256_file(path),
+        )
+    return files
+
+
+def _resource_rule_files() -> tuple[Path, ...]:
+    resource_root = resources.files("codex_ledger.pricing").joinpath("rules_data")
+    resource_paths = []
+    for item in sorted(resource_root.iterdir(), key=lambda ref: ref.name):
+        if item.name.endswith(".json"):
+            resource_paths.append(Path(str(item)))
+    return tuple(resource_paths)
+
+
+def _repo_rule_files() -> tuple[Path, ...]:
+    repo_rule_dir = _repo_rule_dir()
+    if not repo_rule_dir.exists():
+        return ()
+    return tuple(path for path in sorted(repo_rule_dir.glob("*.json")) if path.is_file())
+
+
+def _validate_repo_rule_mirror() -> None:
+    repo_rule_dir = _repo_rule_dir()
+    repo_files = _repo_rule_files()
+    if not repo_files:
+        if repo_rule_dir.exists():
+            raise PricingRuleValidationError(
+                "Repo pricing rule mirror is empty; expected bundled mirror files under "
+                f"{repo_rule_dir}"
+            )
+        return
+
+    bundled_by_filename = {
+        item.filesystem_path.name: item for item in _bundled_rule_files_by_id().values()
+    }
+    repo_by_filename = {path.name: path for path in repo_files}
+
+    unexpected = sorted(set(repo_by_filename) - set(bundled_by_filename))
+    if unexpected:
+        raise PricingRuleValidationError(
+            "Unpackaged repo pricing rule files are not allowed: " + ", ".join(unexpected)
+        )
+
+    for filename, bundled in bundled_by_filename.items():
+        repo_path = repo_by_filename.get(filename)
+        if repo_path is None:
+            raise PricingRuleValidationError(
+                "Repo pricing rule mirror is incomplete; missing "
+                f"{filename} for bundled rule set {bundled.rule_set_id}"
+            )
+        repo_hash = sha256_file(repo_path)
+        if repo_hash != bundled.source_hash:
+            raise PricingRuleValidationError(
+                "Repo pricing rule mirror does not match bundled rule data for "
+                f"{bundled.rule_set_id}: {filename}"
+            )
+
+
+def _repo_rule_dir() -> Path:
+    return _repo_root() / "pricing" / "rules"
 
 
 def _to_datetime(value: str | None) -> datetime:

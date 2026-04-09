@@ -8,6 +8,8 @@ from typing import Any
 from codex_ledger.reports.aggregate import build_aggregate_report
 from codex_ledger.utils.terminal import safe_terminal_field
 
+MAX_RECONCILE_FILE_BYTES = 16 * 1024 * 1024
+
 
 def reconcile_reference(
     archive_home: Path,
@@ -16,9 +18,15 @@ def reconcile_reference(
     period: str | None = None,
     as_of: date | None = None,
 ) -> dict[str, Any]:
+    size_bytes = input_path.stat().st_size
+    if size_bytes > MAX_RECONCILE_FILE_BYTES:
+        raise ValueError(
+            "reference file exceeds configured limit "
+            f"({size_bytes} bytes > {MAX_RECONCILE_FILE_BYTES} bytes)"
+        )
     payload = json.loads(input_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        raise ValueError("Reference JSON must be an object")
+        raise ValueError("Reference JSON must be an object with filters and summary data")
 
     derived_period = period or _derive_period(payload)
     derived_as_of = as_of or _derive_as_of(payload)

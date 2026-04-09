@@ -4,10 +4,8 @@ from pathlib import Path
 from typing import Any
 
 from codex_ledger.reports.schema import stable_report_json
+from codex_ledger.storage.output import write_text_output
 
 
 def write_report_artifact(payload: dict[str, Any], output_path: Path) -> Path:
-    target = output_path.expanduser().resolve(strict=False)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(stable_report_json(payload), encoding="utf-8")
-    return target
+    return write_text_output(output_path, stable_report_json(payload))

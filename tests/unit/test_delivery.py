@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from datetime import date
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from codex_ledger.reports.aggregate import build_aggregate_report
 from codex_ledger.reports.artifacts import write_report_artifact
 from codex_ledger.reports.schema import ReportValidationError, load_report_file, stable_report_json
 from codex_ledger.reports.workspaces import build_workspace_report
+from codex_ledger.storage.output import write_text_output
 from codex_ledger.verify.service import verify_ledger, verify_reports
 from tests.test_support import fixture_path, open_database
 
@@ -198,6 +200,118 @@ def test_reconcile_reference_surfaces_diffs(tmp_path: Path) -> None:
             "current": 14,
         }
     ]
+
+
+def test_reconcile_reference_rejects_oversized_input_before_parse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive_home = _import_fixture_batch(tmp_path / "archive", ("sample_rollout.jsonl",))
+    reference_path = tmp_path / "reference.json"
+    reference_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("codex_ledger.reconcile.service.MAX_RECONCILE_FILE_BYTES", 1)
+
+    def fail_if_parsed(_: str) -> dict[str, object]:
+        raise AssertionError("json.loads should not be called for oversized reconcile inputs")
+
+    monkeypatch.setattr("codex_ledger.reconcile.service.json.loads", fail_if_parsed)
+
+    with pytest.raises(ValueError, match="exceeds configured limit"):
+        reconcile_reference(
+            archive_home=archive_home,
+            input_path=reference_path,
+        )
+
+
+def test_report_artifact_write_rejects_symlinked_output_path(tmp_path: Path) -> None:
+    archive_home = _import_fixture_batch(tmp_path / "archive", ("sample_rollout.jsonl",))
+    payload = build_aggregate_report(
+        archive_home=archive_home,
+        period="day",
+        as_of=date(2026, 4, 1),
+    )
+    victim = tmp_path / "victim.json"
+    victim.write_text('{"untouched":true}\n', encoding="utf-8")
+    target = tmp_path / "report.json"
+    target.symlink_to(victim)
+
+    with pytest.raises(ValueError, match="symlink"):
+        write_report_artifact(payload, target)
+
+    assert victim.read_text(encoding="utf-8") == '{"untouched":true}\n'
+
+
+def test_write_text_output_allows_system_tmp_symlink_root() -> None:
+    tmp_root = Path("/tmp")
+    if not tmp_root.is_symlink():
+        pytest.skip("/tmp is not a symlink on this platform")
+
+    output_dir = Path(tempfile.mkdtemp(prefix="codex-ledger-output-", dir=str(tmp_root)))
+    output_path = output_dir / "out.json"
+    try:
+        written = write_text_output(output_path, '{"ok":true}\n')
+        assert written == output_path
+        assert output_path.read_text(encoding="utf-8") == '{"ok":true}\n'
+    finally:
+        if output_path.exists():
+            output_path.unlink()
+        output_dir.rmdir()
+
+
+def test_write_text_output_rejects_symlinked_user_controlled_parent(tmp_path: Path) -> None:
+    real_dir = tmp_path / "real-parent"
+    real_dir.mkdir()
+    symlink_dir = tmp_path / "parent-link"
+    symlink_dir.symlink_to(real_dir, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink"):
+        write_text_output(symlink_dir / "out.json", '{"ok":true}\n')
+
+
+def test_render_heatmap_rejects_symlinked_output_path(tmp_path: Path) -> None:
+    archive_home = _import_fixture_batch(tmp_path / "archive", ("sample_rollout.jsonl",))
+    recalculate_event_costs(archive_home=archive_home, rule_set_id=RULE_SET_ID)
+    payload = build_aggregate_report(
+        archive_home=archive_home,
+        period="day",
+        as_of=date(2026, 4, 1),
+    )
+    report_path = write_report_artifact(payload, tmp_path / "aggregate.json")
+    victim = tmp_path / "victim.png"
+    victim.write_text("untouched\n", encoding="utf-8")
+    output_path = tmp_path / "heatmap.png"
+    output_path.symlink_to(victim)
+
+    with pytest.raises(ValueError, match="symlink"):
+        render_heatmap(
+            report_path=report_path,
+            output_path=output_path,
+        )
+
+    assert victim.read_text(encoding="utf-8") == "untouched\n"
+
+
+def test_render_workspace_html_rejects_symlinked_sidecar_path(tmp_path: Path) -> None:
+    archive_home, _, _ = _import_absolute_workspace_snapshot(tmp_path)
+    recalculate_event_costs(archive_home=archive_home, rule_set_id=RULE_SET_ID)
+    payload = build_workspace_report(
+        archive_home=archive_home,
+        period="day",
+        as_of=date(2026, 4, 21),
+    )
+    report_path = write_report_artifact(payload, tmp_path / "workspace.json")
+    victim = tmp_path / "victim-sidecar.json"
+    victim.write_text('{"untouched":true}\n', encoding="utf-8")
+    sidecar_path = tmp_path / "workspace.sidecar.json"
+    sidecar_path.symlink_to(victim)
+
+    with pytest.raises(ValueError, match="symlink"):
+        render_workspace_html(
+            report_path=report_path,
+            output_path=tmp_path / "workspace.html",
+            sidecar_path=sidecar_path,
+        )
+
+    assert victim.read_text(encoding="utf-8") == '{"untouched":true}\n'
 
 
 def _import_fixture_batch(archive_home: Path, fixture_names: tuple[str, ...]) -> Path:

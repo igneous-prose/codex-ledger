@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import html
 import json
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
 from codex_ledger.reports.schema import ReportValidationError, load_report_file
+from codex_ledger.storage.output import write_bytes_output, write_text_output
 from codex_ledger.utils.hashing import sha256_file, sha256_text
 from codex_ledger.utils.json import canonical_json
 
@@ -67,9 +69,9 @@ def render_heatmap(
         label = bucket["date"][-2:]
         draw.text((x + 10, y + 10), label, fill="#111827", font=font)
 
-    target = output_path.expanduser().resolve(strict=False)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    image.save(target, format="PNG", compress_level=9)
+    png_buffer = BytesIO()
+    image.save(png_buffer, format="PNG", compress_level=9)
+    target = write_bytes_output(output_path, png_buffer.getvalue())
     sidecar = _write_sidecar(
         report_path=report_path,
         report_payload=payload,
@@ -147,9 +149,7 @@ def render_workspace_html(
         "</html>\n"
     )
 
-    target = output_path.expanduser().resolve(strict=False)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(document, encoding="utf-8")
+    target = write_text_output(output_path, document)
     sidecar = _write_sidecar(
         report_path=report_path,
         report_payload=payload,
@@ -171,9 +171,8 @@ def _write_sidecar(
     target = (
         output_path.with_suffix(output_path.suffix + ".provenance.json")
         if sidecar_path is None
-        else sidecar_path.expanduser().resolve(strict=False)
+        else sidecar_path.expanduser()
     )
-    target.parent.mkdir(parents=True, exist_ok=True)
     pricing = report_payload.get("pricing")
     if isinstance(pricing, dict):
         selected_rule_set_id = pricing.get("selected_rule_set_id")
@@ -219,8 +218,7 @@ def _write_sidecar(
             )
         )[:32],
     }
-    target.write_text(json_pretty(payload), encoding="utf-8")
-    return target
+    return write_text_output(target, json_pretty(payload))
 
 
 def _coverage_for_bucket(bucket: dict[str, Any]) -> str:

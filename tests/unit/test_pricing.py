@@ -25,6 +25,85 @@ def test_seeded_rule_file_loads() -> None:
     assert rule_set.pricing_plane == "reference_usd"
     assert rule_set.currency == "USD"
     assert [rule.model_id for rule in rule_set.rules] == ["gpt-5.4", "gpt-5.4-mini"]
+    assert rule_set.source_path == (
+        "package:codex_ledger.pricing/rules_data/reference_usd_openai_standard_2026_04_07.json"
+    )
+
+
+def test_repo_rule_mirror_mismatch_is_rejected(tmp_path: Path, monkeypatch) -> None:
+    repo_rule_dir = tmp_path / "pricing" / "rules"
+    repo_rule_dir.mkdir(parents=True)
+    mirror_path = repo_rule_dir / "reference_usd_openai_standard_2026_04_07.json"
+    mirror_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("codex_ledger.pricing.rules._repo_root", lambda: tmp_path)
+    _clear_pricing_rule_caches()
+
+    try:
+        load_rule_set(RULE_SET_ID)
+    except PricingRuleValidationError as exc:
+        assert "does not match bundled rule data" in str(exc)
+    else:
+        raise AssertionError("expected mismatched repo rule mirror to be rejected")
+    finally:
+        _clear_pricing_rule_caches()
+
+
+def test_unexpected_repo_rule_file_is_rejected(tmp_path: Path, monkeypatch) -> None:
+    repo_rule_dir = tmp_path / "pricing" / "rules"
+    repo_rule_dir.mkdir(parents=True)
+    extra_rule_path = repo_rule_dir / "rogue.json"
+    extra_rule_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "pricing-rule-set-v1",
+                "rule_set_id": "rogue",
+                "pricing_plane": "reference_usd",
+                "currency": "USD",
+                "version": "2026-04-10",
+                "effective_from_utc": "2026-04-10T00:00:00Z",
+                "effective_to_utc": None,
+                "stability": "reference",
+                "confidence": "high",
+                "token_mapping": {
+                    "input_tokens_field": "input_tokens",
+                    "cached_input_tokens_field": "cached_input_tokens",
+                    "output_tokens_field": "output_tokens",
+                    "cached_input_behavior": "subtract_from_input",
+                },
+                "provenance": {"notes": "rogue"},
+                "rules": [],
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("codex_ledger.pricing.rules._repo_root", lambda: tmp_path)
+    _clear_pricing_rule_caches()
+
+    try:
+        available_rule_set_ids()
+    except PricingRuleValidationError as exc:
+        assert "Unpackaged repo pricing rule files are not allowed" in str(exc)
+    else:
+        raise AssertionError("expected unexpected repo rule file to be rejected")
+    finally:
+        _clear_pricing_rule_caches()
+
+
+def test_empty_repo_rule_mirror_is_rejected(tmp_path: Path, monkeypatch) -> None:
+    repo_rule_dir = tmp_path / "pricing" / "rules"
+    repo_rule_dir.mkdir(parents=True)
+    monkeypatch.setattr("codex_ledger.pricing.rules._repo_root", lambda: tmp_path)
+    _clear_pricing_rule_caches()
+
+    try:
+        load_rule_set(RULE_SET_ID)
+    except PricingRuleValidationError as exc:
+        assert "Repo pricing rule mirror is empty" in str(exc)
+    else:
+        raise AssertionError("expected empty repo rule mirror to be rejected")
+    finally:
+        _clear_pricing_rule_caches()
 
 
 def test_invalid_rule_file_is_rejected(tmp_path: Path) -> None:
@@ -519,3 +598,9 @@ def _source_kind_for_fixture(name: str) -> str:
     if name.endswith(".json"):
         return "imported_json_report"
     return "local_rollout_file"
+
+
+def _clear_pricing_rule_caches() -> None:
+    from codex_ledger.pricing.rules import _bundled_rule_files_by_id
+
+    _bundled_rule_files_by_id.cache_clear()

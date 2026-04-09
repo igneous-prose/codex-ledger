@@ -220,7 +220,7 @@ def test_sync_command_imports_local_rollouts_from_home(tmp_path: Path) -> None:
     assert str(target.resolve()) not in result.stdout
 
 
-def test_doctor_reports_persistence_source_dirs_database_and_migrations(tmp_path: Path) -> None:
+def test_doctor_json_output_redacts_paths_by_default(tmp_path: Path) -> None:
     home = tmp_path / "home"
     archive_home = tmp_path / "archive"
     env = {**os.environ, "HOME": str(home), "PYTHONPATH": "src"}
@@ -243,8 +243,16 @@ def test_doctor_reports_persistence_source_dirs_database_and_migrations(tmp_path
 
     assert result.returncode == 0
     payload = json.loads(result.stdout)
+    assert payload["archive_home"] == "archive"
     assert payload["history_persistence_status"] == "disabled"
-    assert payload["database_path"].endswith("ledger/codex-ledger.sqlite3")
+    assert payload["database_path"] == "ledger/codex-ledger.sqlite3"
+    assert payload["expected_layout"] == {
+        "ledger": "ledger",
+        "pricing": "pricing",
+        "raw": "raw",
+        "reports": "reports",
+        "state": "state",
+    }
     assert payload["migration_status"]["pending"] == [
         "0001_initial.sql",
         "0002_phase1_ledger.sql",
@@ -256,12 +264,56 @@ def test_doctor_reports_persistence_source_dirs_database_and_migrations(tmp_path
         {
             "exists": False,
             "jsonl_count": 0,
-            "path": str(home / ".codex" / "sessions"),
+            "path": "~/.codex/sessions",
         },
         {
             "exists": False,
             "jsonl_count": 0,
-            "path": str(home / ".codex" / "archived_sessions"),
+            "path": "~/.codex/archived_sessions",
+        },
+    ]
+    assert str(archive_home.resolve()) not in result.stdout
+    assert str((archive_home / "ledger" / "codex-ledger.sqlite3").resolve()) not in result.stdout
+    assert str((home / ".codex" / "sessions").resolve()) not in result.stdout
+
+
+def test_doctor_json_show_full_paths_prints_absolute_paths(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    archive_home = tmp_path / "archive"
+    env = {**os.environ, "HOME": str(home), "PYTHONPATH": "src"}
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_ledger",
+            "doctor",
+            "--archive-home",
+            str(archive_home),
+            "--json",
+            "--show-full-paths",
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["archive_home"] == str(archive_home.resolve())
+    expected_database_path = (archive_home / "ledger" / "codex-ledger.sqlite3").resolve()
+    assert payload["database_path"] == str(expected_database_path)
+    assert payload["source_roots"] == [
+        {
+            "exists": False,
+            "jsonl_count": 0,
+            "path": str((home / ".codex" / "sessions").resolve()),
+        },
+        {
+            "exists": False,
+            "jsonl_count": 0,
+            "path": str((home / ".codex" / "archived_sessions").resolve()),
         },
     ]
 
