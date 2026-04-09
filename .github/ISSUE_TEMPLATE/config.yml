@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/igneous-prose/codex-ledger/security/advisories/new
+    about: Use private vulnerability reporting for suspected security issues.
+  - name: Security policy
+    url: https://github.com/igneous-prose/codex-ledger/blob/main/docs/SECURITY.md
+    about: Review the repository security guidance before reporting.

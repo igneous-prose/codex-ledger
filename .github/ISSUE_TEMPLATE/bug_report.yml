@@ -1,0 +1,68 @@
+name: Bug report
+description: Report a defect in the CLI, ledger, import, pricing, or report pipeline.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a defect. Please include a minimal reproduction and avoid
+        attaching real user data or unsanitized session artifacts.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Describe the bug and the incorrect behavior.
+      placeholder: What happened, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide exact commands, inputs, and paths using sanitized data only.
+      placeholder: |
+        1. Run `codex-ledger ...`
+        2. Use fixture or sanitized input ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Describe the expected result.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, Python version, and install method.
+      placeholder: |
+        OS:
+        Python:
+        Install method:
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification context
+      description: List any checks you already ran.
+      placeholder: |
+        uv run ruff check .
+        uv run mypy src
+        uv run pytest
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Paste relevant sanitized logs, traces, or screenshots.

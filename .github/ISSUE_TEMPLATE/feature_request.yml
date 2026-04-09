@@ -1,0 +1,62 @@
+name: Feature request
+description: Propose a scoped improvement to the current Codex Ledger workflow.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please keep requests aligned with the current project scope: local-first,
+        deterministic, privacy-safe CLI workflows with network-free tests.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What workflow or limitation are you trying to address?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the smallest useful change.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List the concrete outcomes that would make this done.
+      placeholder: |
+        - CLI behavior:
+        - Report or storage impact:
+        - Required verification:
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - ingest
+        - storage
+        - pricing
+        - reports
+        - rendering
+        - verification
+        - release / packaging
+        - docs
+        - other
+    validations:
+      required: true
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints
+      description: Note scope, migration, privacy, or determinism constraints.
