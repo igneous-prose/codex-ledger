@@ -107,6 +107,11 @@ def _validate_against_schema(value: Any, schema: dict[str, Any], *, path: str) -
             for key, child_schema in properties.items():
                 if key in value and isinstance(child_schema, dict):
                     _validate_against_schema(value[key], child_schema, path=f"{path}.{key}")
+    if isinstance(value, list):
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value):
+                _validate_against_schema(item, item_schema, path=f"{path}[{index}]")
 
 
 def _validate_type(value: Any, expected_type: str, *, path: str) -> None:

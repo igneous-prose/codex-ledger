@@ -63,6 +63,47 @@ def test_report_schema_validation_rejects_invalid_saved_json(tmp_path: Path) -> 
         load_report_file(report_path)
 
 
+def test_report_schema_validation_rejects_missing_nested_aggregate_fields(tmp_path: Path) -> None:
+    report_path = tmp_path / "invalid-aggregate.json"
+    _write_invalid_aggregate_report(report_path)
+
+    with pytest.raises(ReportValidationError, match="period_buckets"):
+        load_report_file(report_path)
+
+
+def test_report_schema_validation_rejects_invalid_workspace_items(tmp_path: Path) -> None:
+    report_path = tmp_path / "invalid-workspace.json"
+    _write_invalid_workspace_report(report_path)
+
+    with pytest.raises(ReportValidationError, match="agent_run_count"):
+        load_report_file(report_path)
+
+
+def test_report_schema_validation_rejects_invalid_payloads_with_packaged_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_exists = Path.exists
+    repo_schema_root = Path(__file__).resolve().parents[2] / "schemas" / "reports"
+
+    def hide_repo_schemas(path: Path) -> bool:
+        if path == repo_schema_root or repo_schema_root in path.parents:
+            return False
+        return original_exists(path)
+
+    monkeypatch.setattr("codex_ledger.reports.schema.Path.exists", hide_repo_schemas)
+
+    aggregate_path = tmp_path / "invalid-aggregate-fallback.json"
+    workspace_path = tmp_path / "invalid-workspace-fallback.json"
+    _write_invalid_aggregate_report(aggregate_path)
+    _write_invalid_workspace_report(workspace_path)
+
+    with pytest.raises(ReportValidationError, match="period_buckets"):
+        load_report_file(aggregate_path)
+
+    with pytest.raises(ReportValidationError, match="agent_run_count"):
+        load_report_file(workspace_path)
+
+
 def test_report_schema_validation_rejects_oversized_report_json(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -336,6 +377,70 @@ def _import_fixture_batch(archive_home: Path, fixture_names: tuple[str, ...]) ->
             full_backfill=False,
         )
     return archive_home
+
+
+def _write_invalid_aggregate_report(report_path: Path) -> None:
+    report_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "phase4-aggregate-report-v1",
+                "generated_at_utc": "2026-04-07T00:00:00Z",
+                "generator_version": "0.1.0",
+                "filters": {
+                    "period": "day",
+                    "as_of": "2026-04-07",
+                },
+                "timezone": "UTC",
+                "pricing": {
+                    "included": False,
+                    "warnings": ["omitted"],
+                    "coverage_status": "omitted",
+                },
+                "data": {},
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_invalid_workspace_report(report_path: Path) -> None:
+    report_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "phase4-workspace-report-v1",
+                "generated_at_utc": "2026-04-07T00:00:00Z",
+                "generator_version": "0.1.0",
+                "filters": {
+                    "period": "day",
+                    "as_of": "2026-04-07",
+                    "redaction_mode": "redacted",
+                },
+                "timezone": "UTC",
+                "pricing": {
+                    "included": False,
+                    "warnings": ["omitted"],
+                    "coverage_status": "omitted",
+                },
+                "data": {
+                    "workspaces": [
+                        {
+                            "workspace_label": "workspace-a",
+                            "total_tokens": 5,
+                            "session_count": 1,
+                            "top_model": "gpt-test",
+                        }
+                    ]
+                },
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def _import_absolute_workspace_snapshot(tmp_path: Path) -> tuple[Path, Path, Path]:

@@ -22,16 +22,70 @@
       "type": "string"
     },
     "filters": {
-      "type": "object"
+      "type": "object",
+      "required": [
+        "period",
+        "as_of"
+      ],
+      "properties": {
+        "period": {
+          "type": "string"
+        },
+        "as_of": {
+          "type": "string"
+        }
+      }
     },
     "timezone": {
       "const": "UTC"
     },
     "pricing": {
-      "type": "object"
+      "type": "object",
+      "required": [
+        "included",
+        "warnings",
+        "coverage_status"
+      ],
+      "properties": {
+        "included": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "coverage_status": {
+          "type": "string"
+        }
+      }
     },
     "data": {
-      "type": "object"
+      "type": "object",
+      "required": [
+        "period_buckets"
+      ],
+      "properties": {
+        "period_buckets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "date",
+              "total_tokens"
+            ],
+            "properties": {
+              "date": {
+                "type": "string"
+              },
+              "total_tokens": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      }
     }
   }
 }
