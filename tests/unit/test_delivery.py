@@ -86,11 +86,8 @@ def test_report_schema_validation_rejects_invalid_payloads_with_packaged_fallbac
     repo_schema_root = Path(__file__).resolve().parents[2] / "schemas" / "reports"
 
     def hide_repo_schemas(path: Path) -> bool:
-        try:
-            if path.is_relative_to(repo_schema_root):
-                return False
-        except ValueError:
-            pass
+        if path == repo_schema_root or repo_schema_root in path.parents:
+            return False
         return original_exists(path)
 
     monkeypatch.setattr("codex_ledger.reports.schema.Path.exists", hide_repo_schemas)
