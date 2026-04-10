@@ -63,6 +63,78 @@ def test_report_schema_validation_rejects_invalid_saved_json(tmp_path: Path) -> 
         load_report_file(report_path)
 
 
+def test_report_schema_validation_rejects_missing_nested_aggregate_fields(tmp_path: Path) -> None:
+    report_path = tmp_path / "invalid-aggregate.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "phase4-aggregate-report-v1",
+                "generated_at_utc": "2026-04-07T00:00:00Z",
+                "generator_version": "0.1.0",
+                "filters": {
+                    "period": "day",
+                    "as_of": "2026-04-07",
+                },
+                "timezone": "UTC",
+                "pricing": {
+                    "included": False,
+                    "warnings": ["omitted"],
+                    "coverage_status": "omitted",
+                },
+                "data": {},
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ReportValidationError, match="period_buckets"):
+        load_report_file(report_path)
+
+
+def test_report_schema_validation_rejects_invalid_workspace_items(tmp_path: Path) -> None:
+    report_path = tmp_path / "invalid-workspace.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "phase4-workspace-report-v1",
+                "generated_at_utc": "2026-04-07T00:00:00Z",
+                "generator_version": "0.1.0",
+                "filters": {
+                    "period": "day",
+                    "as_of": "2026-04-07",
+                    "redaction_mode": "redacted",
+                },
+                "timezone": "UTC",
+                "pricing": {
+                    "included": False,
+                    "warnings": ["omitted"],
+                    "coverage_status": "omitted",
+                },
+                "data": {
+                    "workspaces": [
+                        {
+                            "workspace_label": "workspace-a",
+                            "total_tokens": 5,
+                            "session_count": 1,
+                            "top_model": "gpt-test",
+                        }
+                    ]
+                },
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ReportValidationError, match="agent_run_count"):
+        load_report_file(report_path)
+
+
 def test_report_schema_validation_rejects_oversized_report_json(
     tmp_path: Path, monkeypatch
 ) -> None:
